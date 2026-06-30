@@ -1,15 +1,14 @@
 import { useMemo, useRef } from 'react'
 import { useLoader, type ThreeEvent } from '@react-three/fiber'
 import * as THREE from 'three'
+import { HEIGHTMAP_URL, TERRAIN_MAX_HEIGHT, TERRAIN_SEGMENTS, TERRAIN_SIZE } from '../constants/terrain'
 import {
   CLICK_DRAG_THRESHOLD_PX,
   isClickGesture,
   isTouchPointer,
 } from '../utils/pointer'
 
-export const TERRAIN_SIZE = 200
-export const TERRAIN_SEGMENTS = 256
-export const TERRAIN_MAX_HEIGHT = 6
+export { TERRAIN_SIZE, TERRAIN_SEGMENTS, TERRAIN_MAX_HEIGHT }
 
 const GRID_CELLS = 20
 
@@ -86,22 +85,32 @@ type PointerSession = {
 
 type CustomTerrainProps = {
   hasPreview?: boolean
+  zoneDrawingMode?: boolean
+  placementEnabled?: boolean
+  editMode?: boolean
   onPreviewMove?: (point: THREE.Vector3) => void
   onPreviewLeave?: () => void
   onPlaceConfirm?: (point?: THREE.Vector3) => void
+  onEditModeTerrainClick?: () => void
+  onZonePoint?: (x: number, z: number) => void
   onTouchPlacementStart?: () => void
   onTouchPlacementEnd?: () => void
 }
 
 export function CustomTerrain({
   hasPreview = false,
+  zoneDrawingMode = false,
+  placementEnabled = true,
+  editMode = false,
   onPreviewMove,
   onPreviewLeave,
   onPlaceConfirm,
+  onEditModeTerrainClick,
+  onZonePoint,
   onTouchPlacementStart,
   onTouchPlacementEnd,
 }: CustomTerrainProps) {
-  const heightmap = useLoader(THREE.TextureLoader, '/assets/manoel_island_heightmap.png')
+  const heightmap = useLoader(THREE.TextureLoader, HEIGHTMAP_URL)
   const gridTexture = useMemo(() => createGridTexture(), [])
   const pointerSessionRef = useRef<PointerSession | null>(null)
 
@@ -122,13 +131,18 @@ export function CustomTerrain({
   }
 
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
-    event.stopPropagation()
     pointerSessionRef.current = {
       x: event.clientX,
       y: event.clientY,
       pointerType: event.pointerType,
       dragged: false,
     }
+
+    if (zoneDrawingMode || editMode) return
+
+    if (!placementEnabled) return
+
+    event.stopPropagation()
 
     if (isTouchPointer(event.pointerType)) {
       onTouchPlacementStart?.()
@@ -139,6 +153,8 @@ export function CustomTerrain({
   }
 
   const handlePointerMove = (event: ThreeEvent<PointerEvent>) => {
+    if (zoneDrawingMode || !placementEnabled) return
+
     const session = pointerSessionRef.current
     const touch = isTouchPointer(event.pointerType)
 
@@ -172,6 +188,18 @@ export function CustomTerrain({
     if (!isClickGesture(session.x, session.y, event.clientX, event.clientY)) return
 
     event.stopPropagation()
+
+    if (zoneDrawingMode) {
+      onZonePoint?.(event.point.x, event.point.z)
+      return
+    }
+
+    if (editMode) {
+      onEditModeTerrainClick?.()
+      return
+    }
+
+    if (!placementEnabled) return
 
     if (isTouchPointer(session.pointerType)) {
       onPlaceConfirm?.()
