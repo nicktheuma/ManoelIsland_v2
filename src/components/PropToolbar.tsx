@@ -1,4 +1,5 @@
 import { getUserPlaceableProps } from '../utils/placementRules'
+import { useAdmin } from '../context/AdminProvider'
 import { useSandbox } from '../context/SandboxProvider'
 import { isPlacementMode, type InteractionMode } from '../types/interaction'
 import { ModeToggle } from './ModeToggle'
@@ -22,16 +23,21 @@ export function PropToolbar({
   hasPreview,
   onPlaceConfirm,
 }: PropToolbarProps) {
-  const { settings, placedProps, canUndo, canRedo, undo, redo, placementError, clearPlacementError } =
+  const { settings, placedProps, canUndo, canRedo, undo, redo, placementError, clearPlacementError, isLayoutLocked } =
     useSandbox()
+  const { isAdmin } = useAdmin()
 
   if (!settings.userVisibility.showPropToolbar) return null
 
   const placeableProps = getUserPlaceableProps(settings)
   const placementMode = isPlacementMode(mode)
 
+  const placementBlocked = isLayoutLocked && !isAdmin
+
   const hint = settings.userVisibility.showPlacementHints
-    ? placementMode
+    ? placementBlocked
+      ? 'Layout locked — new placements are disabled'
+      : placementMode
       ? isTouchDevice
         ? 'Place mode · Drag to position · Tap or Place to confirm'
         : 'Place mode · Hover to preview · Click terrain to place'

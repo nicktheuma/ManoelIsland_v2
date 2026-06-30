@@ -7,18 +7,32 @@ function isEditableTarget(target: EventTarget | null): boolean {
   return tag === 'INPUT' || tag === 'TEXTAREA' || target.isContentEditable
 }
 
+function openAdminGateway(isAdmin: boolean, openLogin: () => void, togglePanel: () => void) {
+  if (isAdmin) togglePanel()
+  else openLogin()
+}
+
 export function useAdminShortcut() {
   const { isAdmin, openLogin, togglePanel } = useAdmin()
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key.toLowerCase() !== 'p') return
-      if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return
       if (isEditableTarget(event.target)) return
 
+      const ctrlOrMeta = event.ctrlKey || event.metaKey
+      const isCtrlShiftA =
+        ctrlOrMeta && event.shiftKey && event.key.toLowerCase() === 'a'
+      const isP =
+        event.key.toLowerCase() === 'p' &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        !event.shiftKey
+
+      if (!isCtrlShiftA && !isP) return
+
       event.preventDefault()
-      if (isAdmin) togglePanel()
-      else openLogin()
+      openAdminGateway(isAdmin, openLogin, togglePanel)
     }
 
     window.addEventListener('keydown', handleKeyDown)

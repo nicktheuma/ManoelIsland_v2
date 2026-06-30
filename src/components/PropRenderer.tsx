@@ -33,6 +33,7 @@ function PropMaterial({
 
   return (
     <meshStandardMaterial
+      key={color}
       color={color}
       transparent={preview}
       opacity={preview ? 0.5 : 1}

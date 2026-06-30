@@ -104,6 +104,16 @@ export function sandboxReducer(state: SandboxState, action: SandboxAction): Sand
           zones: action.patch.zones ?? state.settings.zones,
           categories: action.patch.categories ?? state.settings.categories,
           propLibrary: action.patch.propLibrary ?? state.settings.propLibrary,
+          rateLimit: action.patch.rateLimit
+            ? {
+                ...state.settings.rateLimit,
+                ...action.patch.rateLimit,
+                perProp: {
+                  ...state.settings.rateLimit.perProp,
+                  ...action.patch.rateLimit.perProp,
+                },
+              }
+            : state.settings.rateLimit,
         },
       }
 

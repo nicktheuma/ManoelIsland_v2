@@ -7,6 +7,7 @@ export type PlacedProp = {
   color: string
   metadata: Record<string, unknown>
   createdAt: string
+  isLocked?: boolean
 }
 
 export function createPlacedProp(

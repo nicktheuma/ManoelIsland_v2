@@ -7,6 +7,19 @@ export type AllowedZone = {
   color: string
 }
 
+export type PropRateLimit = {
+  enabled: boolean
+  maxPlacements: number
+  windowMinutes: number
+}
+
+export type RateLimitSettings = {
+  enabled: boolean
+  maxPlacements: number
+  windowMinutes: number
+  perProp: Record<string, PropRateLimit>
+}
+
 export type PlacementRules = {
   snapGridEnabled: boolean
   snapGridSize: number
@@ -26,6 +39,7 @@ export type UserVisibility = {
 
 export type SandboxSettings = {
   placementRules: PlacementRules
+  rateLimit: RateLimitSettings
   zones: AllowedZone[]
   userVisibility: UserVisibility
   categories: PropCategory[]

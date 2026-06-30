@@ -16,6 +16,7 @@ import { useSandbox } from '../context/SandboxProvider'
 import { TerrainHeightProvider, useTerrainHeight } from '../context/TerrainHeightProvider'
 import { previewPlacementPosition, getUserPlaceableProps } from '../utils/placementRules'
 import { isCoarsePointerDevice } from '../utils/pointer'
+import { RateLimitOverlay } from './RateLimitOverlay'
 import { useAdminShortcut } from '../hooks/useAdminShortcut'
 import { useSandboxShortcuts } from '../hooks/useSandboxShortcuts'
 import { isEditMode, isPlacementMode, type InteractionMode } from '../types/interaction'
@@ -156,7 +157,15 @@ function SandboxCanvasRoot(
 }
 
 function SandboxExperience() {
-  const { settings, placeProp, getPropDefinition, selectProp, clearPlacementError } = useSandbox()
+  const {
+    settings,
+    placeProp,
+    getPropDefinition,
+    selectProp,
+    clearPlacementError,
+    rateLimitSecondsRemaining,
+    isMultiplayerLoading,
+  } = useSandbox()
   const isTouchDevice = useMemo(() => isCoarsePointerDevice(), [])
 
   const placeableProps = useMemo(() => getUserPlaceableProps(settings), [settings])
@@ -187,13 +196,13 @@ function SandboxExperience() {
   }, [isTouchDevice])
 
   const handlePlaceConfirm = useCallback(
-    (point?: THREE.Vector3) => {
+    async (point?: THREE.Vector3) => {
       if (!isPlacementMode(mode)) return
 
       const position = point ? propPositionFromPoint(point) : previewPosition
       if (!position) return
 
-      const placed = placeProp(selectedLibraryPropId, position)
+      const placed = await placeProp(selectedLibraryPropId, position)
       if (!placed) return
 
       if (!isTouchDevice) setPreviewPosition(null)
@@ -234,6 +243,14 @@ function SandboxExperience() {
       />
 
       <PropEditPanel mode={mode} />
+      <RateLimitOverlay secondsRemaining={rateLimitSecondsRemaining} />
+      {isMultiplayerLoading && (
+        <div className="pointer-events-none absolute inset-x-0 top-4 z-20 flex justify-center">
+          <div className="rounded bg-slate-900/80 px-3 py-1 text-xs text-slate-300 backdrop-blur">
+            Syncing island…
+          </div>
+        </div>
+      )}
       <AdminPanel />
       <AdminLoginModal />
     </div>

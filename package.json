@@ -8,11 +8,15 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "generate:heightmap": "node scripts/generate-heightmap.mjs",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "supabase:login": "supabase login",
+    "supabase:link": "supabase link",
+    "db:push": "supabase db push"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.6.1",
+    "@supabase/supabase-js": "^2.110.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "three": "^0.185.0"
@@ -25,6 +29,7 @@
     "@vitejs/plugin-react": "^6.0.2",
     "oxlint": "^1.69.0",
     "sharp": "^0.35.2",
+    "supabase": "^2.109.0",
     "tailwindcss": "^4.3.2",
     "typescript": "~6.0.2",
     "vite": "^8.1.0"

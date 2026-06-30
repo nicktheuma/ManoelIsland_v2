@@ -1,7 +1,10 @@
 import { useState } from 'react'
+import { getAdminPassword } from '../../config/defaults'
 import { useAdmin } from '../../context/AdminProvider'
 import { useSandbox } from '../../context/SandboxProvider'
 import type { PropDefinition } from '../../types/propLibrary'
+import type { PropRateLimit } from '../../types/sandbox'
+import { getPropRateLimit } from '../../utils/rateLimitSettings'
 import { VisibilityToggle } from './VisibilityToggle'
 
 function AdminSection({
@@ -27,9 +30,13 @@ function AdminSection({
 }
 
 export function AdminPanel() {
-  const { isAdmin, isPanelOpen, togglePanel, logout, zoneDrawingMode, setZoneDrawingMode, draftZonePoints, clearDraftZone, finishDraftZone } = useAdmin()
-  const { settings, setSettings, patchSettings, placedProps, canUndo, canRedo, undo, redo } = useSandbox()
+  const { isAdmin, isPanelOpen, togglePanel, logout, zoneDrawingMode, setZoneDrawingMode, draftZonePoints, clearDraftZone, finishDraftZone, adminProfile, isSupabaseAdmin } = useAdmin()
+  const { settings, setSettings, patchSettings, placedProps, canUndo, canRedo, undo, redo, syncRateLimitSettings, isAdminSession, isMultiplayer, wipeMapClutter, setLayoutLocked, isLayoutLocked } = useSandbox()
   const [zoneName, setZoneName] = useState('Allowed Zone')
+  const [rateLimitMessage, setRateLimitMessage] = useState<string | null>(null)
+  const [isSavingRateLimits, setIsSavingRateLimits] = useState(false)
+  const [mapOpMessage, setMapOpMessage] = useState<string | null>(null)
+  const [isMapOpRunning, setIsMapOpRunning] = useState(false)
 
   if (!isAdmin || !isPanelOpen) return null
 
@@ -102,12 +109,74 @@ export function AdminPanel() {
     updatePropPlacement(propId, { allowedZoneIds: [...allowed] })
   }
 
+  const updateRateLimit = (patch: Partial<typeof settings.rateLimit>) => {
+    patchSettings({
+      rateLimit: { ...settings.rateLimit, ...patch },
+    })
+  }
+
+  const updatePropRateLimit = (propId: string, patch: Partial<PropRateLimit>) => {
+    const current = settings.rateLimit.perProp[propId] ?? {
+      enabled: true,
+      maxPlacements: settings.rateLimit.maxPlacements,
+      windowMinutes: settings.rateLimit.windowMinutes,
+    }
+    updateRateLimit({
+      perProp: {
+        ...settings.rateLimit.perProp,
+        [propId]: { ...current, ...patch },
+      },
+    })
+  }
+
+  const handleSaveRateLimits = async () => {
+    if (!isMultiplayer) {
+      setRateLimitMessage('Rate limits saved locally. Connect Supabase to enforce on the server.')
+      return
+    }
+
+    setIsSavingRateLimits(true)
+    setRateLimitMessage(null)
+    const result = await syncRateLimitSettings(getAdminPassword())
+    setIsSavingRateLimits(false)
+    setRateLimitMessage(result.ok ? 'Rate limits applied to server.' : result.message)
+  }
+
+  const handleWipeMap = async () => {
+    if (!window.confirm('Remove all props placed by non-admin users? This cannot be undone.')) return
+
+    setIsMapOpRunning(true)
+    setMapOpMessage(null)
+    const result = await wipeMapClutter()
+    setIsMapOpRunning(false)
+    setMapOpMessage(result.ok ? `Removed ${result.deletedCount} props.` : result.message)
+  }
+
+  const handleLockLayout = async () => {
+    setIsMapOpRunning(true)
+    setMapOpMessage(null)
+    const result = await setLayoutLocked(true)
+    setIsMapOpRunning(false)
+    setMapOpMessage(result.ok ? 'Layout locked. New placements disabled for visitors.' : result.message)
+  }
+
+  const handleUnlockLayout = async () => {
+    setIsMapOpRunning(true)
+    setMapOpMessage(null)
+    const result = await setLayoutLocked(false)
+    setIsMapOpRunning(false)
+    setMapOpMessage(result.ok ? 'Layout unlocked. Visitors can place props again.' : result.message)
+  }
+
   return (
     <aside className="pointer-events-auto absolute right-0 top-0 z-40 flex h-full w-full max-w-md flex-col border-l border-slate-800 bg-slate-900/95 shadow-2xl backdrop-blur">
       <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
         <div>
           <h2 className="text-base font-semibold text-white">Admin Panel</h2>
-          <p className="text-xs text-slate-400">{placedProps.length} props on map</p>
+          <p className="text-xs text-slate-400">
+            {placedProps.length} props on map
+            {isSupabaseAdmin && adminProfile?.username ? ` · ${adminProfile.username}` : ''}
+          </p>
         </div>
         <div className="flex gap-2">
           <button type="button" onClick={togglePanel} className="rounded-lg px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800">
@@ -135,6 +204,53 @@ export function AdminPanel() {
               Redo
             </button>
           </div>
+        </AdminSection>
+
+        <AdminSection
+          title="Map Operations"
+          visible={settings.userVisibility.showPlacementHints}
+          onToggleVisibility={() =>
+            updateVisibility({ showPlacementHints: !settings.userVisibility.showPlacementHints })
+          }
+        >
+          <p className="mb-3 text-xs text-slate-400">
+            Admin actions bypass rate limits and apply to the shared multiplayer map.
+          </p>
+          {isLayoutLocked && (
+            <p className="mb-3 rounded-md border border-amber-500/30 bg-amber-950/40 px-2 py-1.5 text-xs text-amber-200">
+              Layout is locked — visitors cannot place or edit props.
+            </p>
+          )}
+          <div className="flex flex-col gap-2">
+            <button
+              type="button"
+              disabled={isMapOpRunning || !isMultiplayer}
+              onClick={() => void handleWipeMap()}
+              className="rounded-lg bg-red-600/90 px-3 py-2 text-sm text-white hover:bg-red-500 disabled:opacity-40"
+            >
+              Wipe Map Clutter
+            </button>
+            <button
+              type="button"
+              disabled={isMapOpRunning || !isMultiplayer || isLayoutLocked}
+              onClick={() => void handleLockLayout()}
+              className="rounded-lg bg-amber-600/90 px-3 py-2 text-sm text-white hover:bg-amber-500 disabled:opacity-40"
+            >
+              Lock Current Layout
+            </button>
+            <button
+              type="button"
+              disabled={isMapOpRunning || !isMultiplayer || !isLayoutLocked}
+              onClick={() => void handleUnlockLayout()}
+              className="rounded-lg bg-emerald-600/90 px-3 py-2 text-sm text-white hover:bg-emerald-500 disabled:opacity-40"
+            >
+              Unlock Current Layout
+            </button>
+          </div>
+          {!isMultiplayer && (
+            <p className="mt-2 text-xs text-slate-500">Connect Supabase to use map operations.</p>
+          )}
+          {mapOpMessage && <p className="mt-2 text-xs text-slate-400">{mapOpMessage}</p>}
         </AdminSection>
 
         <AdminSection
@@ -205,6 +321,135 @@ export function AdminPanel() {
               />
             </label>
           </div>
+        </AdminSection>
+
+        <AdminSection
+          title="Rate Limits"
+          visible={settings.userVisibility.showPlacementHints}
+          onToggleVisibility={() =>
+            updateVisibility({ showPlacementHints: !settings.userVisibility.showPlacementHints })
+          }
+        >
+          {isAdminSession && isMultiplayer && (
+            <p className="mb-3 rounded-md border border-emerald-500/30 bg-emerald-950/40 px-2 py-1.5 text-xs text-emerald-200">
+              Admin session active — rate limits bypassed for you.
+            </p>
+          )}
+
+          <label className="mb-2 flex items-center gap-2 text-sm text-slate-300">
+            <input
+              type="checkbox"
+              checked={settings.rateLimit.enabled}
+              onChange={(event) => updateRateLimit({ enabled: event.target.checked })}
+            />
+            Enable placement rate limits
+          </label>
+
+          <div className="mb-3 grid grid-cols-2 gap-2">
+            <label className="text-xs text-slate-400">
+              Default max placements
+              <input
+                type="number"
+                min={1}
+                value={settings.rateLimit.maxPlacements}
+                onChange={(event) =>
+                  updateRateLimit({ maxPlacements: Number(event.target.value) || 1 })
+                }
+                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-white"
+              />
+            </label>
+            <label className="text-xs text-slate-400">
+              Default window (minutes)
+              <input
+                type="number"
+                min={0.1}
+                step={0.1}
+                value={settings.rateLimit.windowMinutes}
+                onChange={(event) =>
+                  updateRateLimit({ windowMinutes: Number(event.target.value) || 1 })
+                }
+                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-white"
+              />
+            </label>
+          </div>
+
+          <p className="mb-2 text-xs text-slate-500">
+            Per-prop overrides (placements per minute). Leave disabled to use defaults.
+          </p>
+          <div className="mb-3 max-h-48 space-y-2 overflow-y-auto">
+            {settings.propLibrary
+              .filter((prop) => prop.userPlaceable)
+              .map((prop) => {
+                const limit = getPropRateLimit(settings.rateLimit, prop.id)
+                const perProp = settings.rateLimit.perProp[prop.id]
+                return (
+                  <div key={prop.id} className="rounded-md border border-slate-800/80 p-2">
+                    <div className="mb-2 flex items-center justify-between text-xs text-slate-300">
+                      <span>{prop.name}</span>
+                      <label className="flex items-center gap-1">
+                        <input
+                          type="checkbox"
+                          checked={perProp?.enabled ?? false}
+                          onChange={(event) =>
+                            updatePropRateLimit(prop.id, {
+                              enabled: event.target.checked,
+                              maxPlacements: limit.maxPlacements,
+                              windowMinutes: limit.windowMinutes,
+                            })
+                          }
+                        />
+                        Custom limit
+                      </label>
+                    </div>
+                    {(perProp?.enabled ?? false) && (
+                      <div className="grid grid-cols-2 gap-2">
+                        <label className="text-[11px] text-slate-400">
+                          Max / window
+                          <input
+                            type="number"
+                            min={1}
+                            value={perProp?.maxPlacements ?? limit.maxPlacements}
+                            onChange={(event) =>
+                              updatePropRateLimit(prop.id, {
+                                maxPlacements: Number(event.target.value) || 1,
+                              })
+                            }
+                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-white"
+                          />
+                        </label>
+                        <label className="text-[11px] text-slate-400">
+                          Window (min)
+                          <input
+                            type="number"
+                            min={0.1}
+                            step={0.1}
+                            value={perProp?.windowMinutes ?? limit.windowMinutes}
+                            onChange={(event) =>
+                              updatePropRateLimit(prop.id, {
+                                windowMinutes: Number(event.target.value) || 1,
+                              })
+                            }
+                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-white"
+                          />
+                        </label>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+          </div>
+
+          <button
+            type="button"
+            disabled={isSavingRateLimits}
+            onClick={() => void handleSaveRateLimits()}
+            className="rounded-lg bg-cyan-600 px-3 py-2 text-sm text-white disabled:opacity-40"
+          >
+            {isSavingRateLimits ? 'Applying…' : 'Apply rate limits to server'}
+          </button>
+          {rateLimitMessage && (
+            <p className="mt-2 text-xs text-slate-400">{rateLimitMessage}</p>
+          )}
         </AdminSection>
 
         <AdminSection

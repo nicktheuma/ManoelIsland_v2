@@ -1,5 +1,5 @@
 import type { PropCategory, PropDefinition } from '../types/propLibrary'
-import type { SandboxSettings } from '../types/sandbox'
+import type { RateLimitSettings, SandboxSettings } from '../types/sandbox'
 import { withPropDefaults } from './propDefaults'
 
 export const DEFAULT_CATEGORIES: PropCategory[] = [
@@ -118,6 +118,13 @@ export const DEFAULT_PROP_LIBRARY: PropDefinition[] = [
   }),
 ]
 
+export const DEFAULT_RATE_LIMIT: RateLimitSettings = {
+  enabled: true,
+  maxPlacements: 3,
+  windowMinutes: 5,
+  perProp: {},
+}
+
 export const DEFAULT_SANDBOX_SETTINGS: SandboxSettings = {
   placementRules: {
     snapGridEnabled: false,
@@ -127,6 +134,7 @@ export const DEFAULT_SANDBOX_SETTINGS: SandboxSettings = {
     densityCellSize: 10,
     densityEnabled: false,
   },
+  rateLimit: DEFAULT_RATE_LIMIT,
   zones: [],
   userVisibility: {
     showPropToolbar: true,
