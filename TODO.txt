@@ -1,0 +1,107 @@
+STRATEGY FROM GEMINI 29.06.2026
+
+Phase 1: Local Sandbox & Manoel Island Mesh
+Prompt 1.1: Project Setup & Ground Plane
+Plaintext
+
+Context: Building a 3D urban design sandbox of Manoel Island, Malta (Approx center coordinates: 35.904°N, 14.502°E).
+Tech Stack: React, Vite, Tailwind CSS, Three.js (@react-three/fiber, @react-three/drei).
+
+Task:
+Create a basic Three.js canvas setup using React Three Fiber.
+1. Include an OrbitControls component configured with reasonable zoom limits.
+2. Add ambient and directional lighting to simulate standard daylight.
+3. Generate a flat `PlaneGeometry` representing the bounding box of Manoel Island and its immediate surrounding coasts (Sliema Creek and Lazzaretto Creek).
+4. Set the plane size to 200x200 units, positioned at [0, 0, 0], rotated flat on the X-axis so it acts as the ground.
+5. Apply a high-contrast placeholder grid material to this plane so we can see spatial positioning clearly.
+Prompt 1.2: Heightmap Displacement Integration
+Plaintext
+
+Context: We want to model the topography of Manoel Island (which features a low, flat hill dropping to sea level at the coastline) via a grayscale heightmap.
+
+Task:
+Create a CustomTerrain component that replaces our flat plane.
+1. Use `useLoader` from R3F to load a local grayscale heightmap texture ('/assets/manoel_island_heightmap.png').
+2. Apply this texture to a `PlaneGeometry` with high segment density (at least 128x128 or 256x256 segments).
+3. Write a vertex-level script or custom material processing hook that reads the texture pixel values to modify the Z (or Y depending on your alignment) position of each vertex, displacing the plane to create the 3D topology of Manoel Island.
+4. Scale the max height displacement appropriately so it feels like a low, leaf-shaped island surrounded by flat sea-level water.
+Prompt 1.3: Click-to-Place Prop Logic
+Plaintext
+
+Context: Users need to plant objects on the island like trees or benches.
+
+Task:
+Implement interactive prop placement using a Three.js Raycaster.
+1. Create a local state array `placedProps` where each object contains an id, type ('tree' | 'bench' | 'pavilion'), and an array of 3D coordinates `[x, y, z]`.
+2. Attach an `onClick` or `onPointerDown` listener directly to the CustomTerrain mesh.
+3. When the user clicks the terrain, calculate the exact intersection point in 3D space.
+4. Append a new prop object into the `placedProps` state array at that exact intersection point.
+5. Map over `placedProps` inside the canvas to render simple placeholders:
+   - 'tree' = green cylinder
+   - 'bench' = brown box
+   - 'pavilion' = grey torus or capsule
+Phase 2: Supabase Realtime & Rate Limits ($r/\text{place}$ Engine)
+Prompt 2.1: Supabase Schema Configuration
+Plaintext
+
+Context: Moving the sandbox to a shared real-time multiplayer ecosystem using Supabase.
+
+Task:
+Write the SQL migration script to configure our database backend. I need three tables:
+1. `profiles`: Contains id (uuid, primary key), username (text), and role (text, defaults to 'user').
+2. `placed_props`: Contains id (uuid), prop_type (text), x (float), y (float), z (float), and user_id (uuid, foreign key linking to profiles).
+3. `user_interventions`: Contains id (bigint), user_id (uuid), action_type (text), and created_at (timestamp with time zone, defaults to now()).
+
+Enable Row Level Security (RLS) on all tables. Write open read policies so anyone can download the map state, but restrict inserts to authenticated users.
+Prompt 2.2: Rate Limiter Database Function
+Plaintext
+
+Context: We are recreating the token/cooldown mechanic of r/place. Users should be restricted from spamming props.
+
+Task:
+Write a PostgreSQL PL/pgSQL function and a matching database trigger for Supabase.
+1. The function should check the `user_interventions` table before a user performs an insert into `placed_props`.
+2. Count how many entries the current `auth.uid()` has made within the last 5 minutes.
+3. If the count is greater than or equal to 3, raise an exception: 'Rate limit reached. Please wait before changing Manoel Island again.'
+4. If the count is less than 3, allow the insert and automatically log a new row into `user_interventions`.
+Prompt 2.3: Realtime Synchronization Hook
+Plaintext
+
+Context: Synchronizing actions across multiple browsers using Supabase WebSockets.
+
+Task:
+Create a custom React hook `useMultiplayerSandbox` that interfaces with Supabase.
+1. On initial component mount, fetch all existing rows from the `placed_props` table and populate our 3D canvas state.
+2. Initialize a Supabase Realtime subscription channel listening to changes on the `placed_props` table.
+3. When an 'INSERT' event is intercepted from the broadcast channel, instantly append that prop to the local rendering array.
+4. When a 'DELETE' event is intercepted, instantly strip it from the local rendering array.
+5. Provide an active countdown timer state variable to the frontend when the database trigger returns a rate limit exception.
+Phase 3: Hidden Admin Controls
+Prompt 3.1: Admin Guard & Hidden Route
+Plaintext
+
+Context: The project administrator needs a hidden gateway to remodel Manoel Island or clear the canvas.
+
+Task:
+Build an Admin Panel authentication check and layout interface.
+1. Implement a hidden global event listener looking for a specific keyboard shortcut combination (e.g., Ctrl + Shift + A).
+2. When triggered, present a clean, unstyled login popup modal linked to Supabase Auth.
+3. Upon a successful login, cross-reference the user's UUID against the `profiles` table to see if their `role === 'admin'`.
+4. If they pass, set an `isAdmin` state context to true and slide open a secure overlay menu containing command options. If they fail, display a generic error message and log out.
+Prompt 3.2: Map Overrides (Admin-Only Mutations)
+Plaintext
+
+Context: The Admin needs to seed the canvas and clear out public clutter without facing rate limits.
+
+Task:
+Add operational features to our secure Admin Toolbar UI component.
+1. Add a button titled "Wipe Map Clutter". This should call an RPC database script or execute a Supabase mutation deleting all rows from `placed_props` where the user role is not admin.
+2. Add a "Lock Current Layout" utility. This changes a boolean column `is_locked` in the database for specified props, which standard users lack permissions to mutate via RLS policies.
+3. Ensure all admin actions completely bypass the `user_interventions` rate-limiter logic.
+🎯 Pro-Tips for Getting Results from Cursor
+Run in order: Let Cursor finish Phase 1 entirely before sending Phase 2 files.
+
+Keep terminal open: If Cursor creates a Three.js component that throws a runtime error, copy the exact console error log, paste it back into Cursor Chat, and say: "Fix this error in the component you just wrote."
+
+Keep asset sizes small: For the heightmap in Step 1.2, save a simple 256x256 pixel .png file inside your /public/assets/ directory. Anything larger might slow down vertex calculations during the prototyping phase.
+
