@@ -1,10 +1,13 @@
 import { Suspense, useCallback, useMemo, useState } from 'react'
 import { Canvas } from '@react-three/fiber'
-import { OrbitControls } from '@react-three/drei'
+import { Environment, OrbitControls } from '@react-three/drei'
 import * as THREE from 'three'
+import { isHdriPreset, normalizeSceneAppearance } from '../config/sceneAppearance'
 import { AdminLoginModal } from './admin/AdminLoginModal'
 import { AdminPanel } from './admin/AdminPanel'
 import { CustomTerrain } from './CustomTerrain'
+import { AnimatedWater } from './AnimatedWater'
+import { SceneFog } from './SceneFog'
 import { PlacedPropsLayer, PropPreviewLayer } from './PlacedPropsLayer'
 import { PropEditPanel } from './PropEditPanel'
 import { PropToolbar } from './PropToolbar'
@@ -36,6 +39,22 @@ type SandboxCanvasProps = {
   onTouchPlacementEnd: () => void
 }
 
+function SceneLighting({ hdriPreset }: { hdriPreset: string }) {
+  const useHdri = isHdriPreset(hdriPreset)
+
+  return (
+    <>
+      <ambientLight intensity={useHdri ? 0.25 : 0.45} />
+      <directionalLight position={[60, 80, 40]} intensity={useHdri ? 0.8 : 1.2} castShadow />
+      {useHdri && (
+        <Suspense fallback={null}>
+          <Environment key={hdriPreset} preset={hdriPreset} background={false} />
+        </Suspense>
+      )}
+    </>
+  )
+}
+
 function SandboxCanvas({
   mode,
   selectedLibraryPropId,
@@ -50,8 +69,9 @@ function SandboxCanvas({
   onTouchPlacementStart,
   onTouchPlacementEnd,
 }: SandboxCanvasProps) {
-  const { selectedPropId, selectProp } = useSandbox()
+  const { selectedPropId, selectProp, settings } = useSandbox()
   const { zoneDrawingMode, addDraftZonePoint } = useAdmin()
+  const { backgroundColor, hdriPreset } = normalizeSceneAppearance(settings.sceneAppearance)
 
   const placementMode = isPlacementMode(mode)
   const editMode = isEditMode(mode)
@@ -70,10 +90,12 @@ function SandboxCanvas({
 
   return (
     <>
-      <color attach="background" args={['#0c1222']} />
+      <color attach="background" args={[backgroundColor]} />
 
-      <ambientLight intensity={0.45} />
-      <directionalLight position={[60, 80, 40]} intensity={1.2} castShadow />
+      <SceneFog />
+      <SceneLighting hdriPreset={hdriPreset} />
+
+      <AnimatedWater />
 
       <Suspense fallback={null}>
         <CustomTerrain

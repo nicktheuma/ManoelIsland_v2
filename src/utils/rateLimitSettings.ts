@@ -1,6 +1,7 @@
 import { DEFAULT_RATE_LIMIT } from '../config/defaults'
+import { normalizeSceneAppearance } from '../config/sceneAppearance'
 import { supabase } from '../lib/supabase'
-import type { RateLimitSettings, SandboxSettings } from '../types/sandbox'
+import type { RateLimitSettings, SandboxSettings, SceneAppearance } from '../types/sandbox'
 
 export type SandboxSettingsRow = {
   rate_limit_enabled: boolean
@@ -8,6 +9,7 @@ export type SandboxSettingsRow = {
   window_minutes: number
   per_prop_limits: Record<string, RateLimitSettings['perProp'][string]>
   layout_locked: boolean
+  scene_appearance?: Partial<SceneAppearance> | null
 }
 
 export function rateLimitFromSettings(settings: SandboxSettings): RateLimitSettings {
@@ -32,6 +34,10 @@ export function mergeRateLimitFromRow(
       windowMinutes: Number(row.window_minutes),
       perProp: row.per_prop_limits ?? {},
     },
+    sceneAppearance: normalizeSceneAppearance({
+      ...settings.sceneAppearance,
+      ...row.scene_appearance,
+    }),
   }
 }
 
@@ -52,7 +58,9 @@ export async function fetchRemoteSandboxSettings(): Promise<SandboxSettingsRow |
 
   const { data, error } = await supabase
     .from('sandbox_settings')
-    .select('rate_limit_enabled, max_placements, window_minutes, per_prop_limits, layout_locked')
+    .select(
+      'rate_limit_enabled, max_placements, window_minutes, per_prop_limits, layout_locked, scene_appearance',
+    )
     .eq('id', 1)
     .maybeSingle()
 

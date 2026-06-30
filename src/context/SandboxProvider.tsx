@@ -8,11 +8,8 @@ import {
   useRef,
   type ReactNode,
 } from 'react'
-import {
-  DEFAULT_PROP_LIBRARY,
-  DEFAULT_SANDBOX_SETTINGS,
-  SANDBOX_STORAGE_KEY,
-} from '../config/defaults'
+import { DEFAULT_PROP_LIBRARY, DEFAULT_SANDBOX_SETTINGS, SANDBOX_STORAGE_KEY } from '../config/defaults'
+import { normalizeSceneAppearance } from '../config/sceneAppearance'
 import { mergePropDefinition } from '../config/propDefaults'
 import {
   canRedo,
@@ -22,12 +19,14 @@ import {
 } from '../store/sandboxReducer'
 import { createPlacedProp, type PlacedProp } from '../types/props'
 import type { PropDefinition } from '../types/propLibrary'
-import type { SandboxSettings } from '../types/sandbox'
+import type { SandboxSettings, SceneAppearance } from '../types/sandbox'
 import { useMultiplayerSandbox } from '../hooks/useMultiplayerSandbox'
 import { useLocalAdminActive } from '../hooks/useLocalAdminActive'
 import { applyPlacementRules } from '../utils/placementRules'
 import { fetchRemoteSandboxSettings, mergeRateLimitFromRow, syncRateLimitSettingsToRemote } from '../utils/rateLimitSettings'
+import { syncSceneAppearanceToRemote } from '../utils/sceneAppearanceSettings'
 import { LAYOUT_LOCKED_MESSAGE } from '../lib/supabase'
+import { supabase } from '../lib/supabase'
 import { resolvePropVariation } from '../utils/propVariation'
 
 type PersistedSandbox = {
@@ -64,6 +63,10 @@ type SandboxContextValue = {
   registerAdminSession: (password: string) => Promise<boolean>
   clearAdminSession: () => Promise<void>
   syncRateLimitSettings: (adminPassword: string) => Promise<{ ok: true } | { ok: false; message: string }>
+  syncSceneAppearanceSettings: (
+    sceneAppearance: SceneAppearance,
+    adminPassword: string,
+  ) => Promise<{ ok: true } | { ok: false; message: string }>
   isAdminSession: boolean
   wipeMapClutter: () => Promise<{ ok: true; deletedCount: number } | { ok: false; message: string }>
   setLayoutLocked: (
@@ -107,6 +110,10 @@ function mergeSettings(stored: SandboxSettings | undefined): SandboxSettings {
         ...stored.rateLimit?.perProp,
       },
     },
+    sceneAppearance: normalizeSceneAppearance({
+      ...DEFAULT_SANDBOX_SETTINGS.sceneAppearance,
+      ...stored.sceneAppearance,
+    }),
   }
 }
 
@@ -138,16 +145,37 @@ export function SandboxProvider({ children }: { children: ReactNode }) {
 
     fetchRemoteSandboxSettings().then((row) => {
       if (cancelled || !row) return
+      const merged = mergeRateLimitFromRow(DEFAULT_SANDBOX_SETTINGS, row)
       dispatch({
         type: 'PATCH_SETTINGS',
         patch: {
-          rateLimit: mergeRateLimitFromRow(DEFAULT_SANDBOX_SETTINGS, row).rateLimit,
+          rateLimit: merged.rateLimit,
+          sceneAppearance: merged.sceneAppearance,
         },
       })
     })
 
+    const settingsChannel = supabase
+      ?.channel('sandbox_scene_appearance')
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'sandbox_settings' },
+        (payload) => {
+          const row = payload.new as { scene_appearance?: Partial<SceneAppearance> }
+          if (!row.scene_appearance) return
+          dispatch({
+            type: 'PATCH_SETTINGS',
+            patch: {
+              sceneAppearance: normalizeSceneAppearance(row.scene_appearance),
+            },
+          })
+        },
+      )
+      .subscribe()
+
     return () => {
       cancelled = true
+      if (settingsChannel) supabase?.removeChannel(settingsChannel)
     }
   }, [multiplayer.enabled])
 
@@ -155,6 +183,12 @@ export function SandboxProvider({ children }: { children: ReactNode }) {
     async (adminPassword: string) =>
       syncRateLimitSettingsToRemote(state.settings.rateLimit, adminPassword),
     [state.settings.rateLimit],
+  )
+
+  const syncSceneAppearanceSettings = useCallback(
+    async (sceneAppearance: SceneAppearance, adminPassword: string) =>
+      syncSceneAppearanceToRemote(sceneAppearance, adminPassword),
+    [],
   )
 
   const getPropDefinition = useCallback(
@@ -306,12 +340,13 @@ export function SandboxProvider({ children }: { children: ReactNode }) {
       registerAdminSession: multiplayer.registerAdminSession,
       clearAdminSession: multiplayer.clearAdminSession,
       syncRateLimitSettings,
+      syncSceneAppearanceSettings,
       isAdminSession: multiplayer.isAdminSession,
       wipeMapClutter,
       setLayoutLocked,
       isLayoutLocked,
     }),
-    [state, isAdmin, isLayoutLocked, multiplayer, placeProp, updateProp, deleteProp, deleteSelected, wipeMapClutter, setLayoutLocked, getPropDefinition, registerTerrainHeight, syncRateLimitSettings],
+    [state, isAdmin, isLayoutLocked, multiplayer, placeProp, updateProp, deleteProp, deleteSelected, wipeMapClutter, setLayoutLocked, getPropDefinition, registerTerrainHeight, syncRateLimitSettings, syncSceneAppearanceSettings],
   )
 
   return <SandboxContext.Provider value={value}>{children}</SandboxContext.Provider>

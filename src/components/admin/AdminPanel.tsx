@@ -1,44 +1,75 @@
 import { useState } from 'react'
 import { getAdminPassword } from '../../config/defaults'
+import { DEFAULT_FOG_SETTINGS } from '../../config/fogSettings'
+import { DEFAULT_SCENE_APPEARANCE, HDRI_OPTIONS, normalizeSceneAppearance } from '../../config/sceneAppearance'
+import { DEFAULT_WATER_SETTINGS, WATER_DETAIL_LAYER_OPTIONS, WATER_MESH_QUALITY_OPTIONS, WATER_STYLE_OPTIONS } from '../../config/waterSettings'
 import { useAdmin } from '../../context/AdminProvider'
 import { useSandbox } from '../../context/SandboxProvider'
+import { useAdminPanelLayout, type AdminPanelSectionId } from '../../hooks/useAdminPanelLayout'
 import type { PropDefinition } from '../../types/propLibrary'
-import type { PropRateLimit } from '../../types/sandbox'
+import type { FogSettings, PropRateLimit, SceneAppearance, WaterMeshQuality, WaterSettings } from '../../types/sandbox'
 import { getPropRateLimit } from '../../utils/rateLimitSettings'
 import { VisibilityToggle } from './VisibilityToggle'
 
 function AdminSection({
   title,
+  expanded,
+  onToggleExpanded,
   visible,
   onToggleVisibility,
+  showVisibilityToggle = true,
   children,
 }: {
   title: string
-  visible: boolean
-  onToggleVisibility: () => void
+  expanded: boolean
+  onToggleExpanded: () => void
+  visible?: boolean
+  onToggleVisibility?: () => void
+  showVisibilityToggle?: boolean
   children: React.ReactNode
 }) {
   return (
-    <section className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <h3 className="text-sm font-medium text-slate-200">{title}</h3>
-        <VisibilityToggle visible={visible} onToggle={onToggleVisibility} />
+    <section className="rounded-lg border border-slate-800 bg-slate-950/60">
+      <div className="flex items-center justify-between gap-2 p-3">
+        <button
+          type="button"
+          onClick={onToggleExpanded}
+          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+          aria-expanded={expanded}
+        >
+          <span className="shrink-0 text-xs text-slate-500" aria-hidden>
+            {expanded ? '▼' : '▶'}
+          </span>
+          <h3 className="truncate text-sm font-medium text-slate-200">{title}</h3>
+        </button>
+        {showVisibilityToggle && visible !== undefined && onToggleVisibility && (
+          <VisibilityToggle visible={visible} onToggle={onToggleVisibility} />
+        )}
       </div>
-      {children}
+      {expanded && <div className="space-y-3 border-t border-slate-800/80 px-3 pb-3 pt-3">{children}</div>}
     </section>
   )
 }
 
 export function AdminPanel() {
   const { isAdmin, isPanelOpen, togglePanel, logout, zoneDrawingMode, setZoneDrawingMode, draftZonePoints, clearDraftZone, finishDraftZone, adminProfile, isSupabaseAdmin } = useAdmin()
-  const { settings, setSettings, patchSettings, placedProps, canUndo, canRedo, undo, redo, syncRateLimitSettings, isAdminSession, isMultiplayer, wipeMapClutter, setLayoutLocked, isLayoutLocked } = useSandbox()
+  const { settings, setSettings, patchSettings, placedProps, canUndo, canRedo, undo, redo, syncRateLimitSettings, syncSceneAppearanceSettings, isAdminSession, isMultiplayer, wipeMapClutter, setLayoutLocked, isLayoutLocked } = useSandbox()
   const [zoneName, setZoneName] = useState('Allowed Zone')
   const [rateLimitMessage, setRateLimitMessage] = useState<string | null>(null)
+  const [sceneMessage, setSceneMessage] = useState<string | null>(null)
+  const [isSavingScene, setIsSavingScene] = useState(false)
   const [isSavingRateLimits, setIsSavingRateLimits] = useState(false)
   const [mapOpMessage, setMapOpMessage] = useState<string | null>(null)
   const [isMapOpRunning, setIsMapOpRunning] = useState(false)
+  const { scrollRef, toggleSection, isExpanded } = useAdminPanelLayout(isPanelOpen)
 
   if (!isAdmin || !isPanelOpen) return null
+
+  const sceneAppearance = normalizeSceneAppearance(settings.sceneAppearance)
+  const section = (id: AdminPanelSectionId) => ({
+    expanded: isExpanded(id),
+    onToggleExpanded: () => toggleSection(id),
+  })
 
   const updateRules = (patch: Partial<typeof settings.placementRules>) => {
     patchSettings({
@@ -168,6 +199,57 @@ export function AdminPanel() {
     setMapOpMessage(result.ok ? 'Layout unlocked. Visitors can place props again.' : result.message)
   }
 
+  const applySceneAppearance = async (next: SceneAppearance) => {
+    patchSettings({ sceneAppearance: next })
+
+    if (!isMultiplayer) {
+      setSceneMessage('Scene settings saved locally.')
+      return
+    }
+
+    setIsSavingScene(true)
+    setSceneMessage(null)
+    const result = await syncSceneAppearanceSettings(next, getAdminPassword())
+    setIsSavingScene(false)
+    setSceneMessage(result.ok ? 'Scene applied for all visitors.' : result.message)
+  }
+
+  const updateSceneAppearance = (patch: Partial<SceneAppearance>) => {
+    void applySceneAppearance({ ...sceneAppearance, ...patch })
+  }
+
+  const resetSceneAppearance = () => {
+    void applySceneAppearance(DEFAULT_SCENE_APPEARANCE)
+  }
+
+  const updateWater = (patch: Partial<WaterSettings>) => {
+    void applySceneAppearance({
+      ...sceneAppearance,
+      water: { ...sceneAppearance.water, ...patch },
+    })
+  }
+
+  const resetWater = () => {
+    void applySceneAppearance({
+      ...sceneAppearance,
+      water: DEFAULT_WATER_SETTINGS,
+    })
+  }
+
+  const updateFog = (patch: Partial<FogSettings>) => {
+    void applySceneAppearance({
+      ...sceneAppearance,
+      fog: { ...sceneAppearance.fog, ...patch },
+    })
+  }
+
+  const resetFog = () => {
+    void applySceneAppearance({
+      ...sceneAppearance,
+      fog: DEFAULT_FOG_SETTINGS,
+    })
+  }
+
   return (
     <aside className="pointer-events-auto absolute right-0 top-0 z-40 flex h-full w-full max-w-md flex-col border-l border-slate-800 bg-slate-900/95 shadow-2xl backdrop-blur">
       <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
@@ -188,13 +270,445 @@ export function AdminPanel() {
         </div>
       </div>
 
-      <div className="flex-1 space-y-4 overflow-y-auto p-4">
+      <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto p-4">
+        <AdminSection
+          title="Scene Appearance"
+          showVisibilityToggle={false}
+          {...section('sceneAppearance')}
+        >
+          <p className="text-xs text-slate-400">
+            HDRI lighting and canvas colors apply to everyone when Supabase is connected.
+          </p>
+
+          <label className="block text-sm text-slate-300">
+            HDRI environment
+            <select
+              value={sceneAppearance.hdriPreset}
+              onChange={(event) =>
+                updateSceneAppearance({ hdriPreset: event.target.value as SceneAppearance['hdriPreset'] })
+              }
+              disabled={isSavingScene}
+              className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white"
+            >
+              {HDRI_OPTIONS.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <label className="text-xs text-slate-400">
+              Background
+              <input
+                type="color"
+                value={sceneAppearance.backgroundColor}
+                onChange={(event) => updateSceneAppearance({ backgroundColor: event.target.value })}
+                disabled={isSavingScene}
+                className="mt-1 h-9 w-full cursor-pointer rounded border border-slate-700 bg-slate-950"
+              />
+            </label>
+            <label className="text-xs text-slate-400">
+              Terrain fill
+              <input
+                type="color"
+                value={sceneAppearance.terrainFillColor}
+                onChange={(event) => updateSceneAppearance({ terrainFillColor: event.target.value })}
+                disabled={isSavingScene}
+                className="mt-1 h-9 w-full cursor-pointer rounded border border-slate-700 bg-slate-950"
+              />
+            </label>
+            <label className="text-xs text-slate-400">
+              Terrain grid
+              <input
+                type="color"
+                value={sceneAppearance.terrainGridColor}
+                onChange={(event) => updateSceneAppearance({ terrainGridColor: event.target.value })}
+                disabled={isSavingScene}
+                className="mt-1 h-9 w-full cursor-pointer rounded border border-slate-700 bg-slate-950"
+              />
+            </label>
+          </div>
+
+          <label className="block text-xs text-slate-400">
+            Terrain fill opacity ({Math.round(sceneAppearance.terrainFillOpacity * 100)}%)
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={Math.round(sceneAppearance.terrainFillOpacity * 100)}
+              onChange={(event) =>
+                updateSceneAppearance({ terrainFillOpacity: Number(event.target.value) / 100 })
+              }
+              disabled={isSavingScene}
+              className="mt-1 w-full accent-cyan-500"
+            />
+          </label>
+
+          <button
+            type="button"
+            onClick={resetSceneAppearance}
+            disabled={isSavingScene}
+            className="rounded-lg bg-slate-800 px-3 py-2 text-sm text-white disabled:opacity-40"
+          >
+            Reset to defaults
+          </button>
+          {sceneMessage && <p className="text-xs text-slate-400">{sceneMessage}</p>}
+        </AdminSection>
+
+        <AdminSection title="Fog" showVisibilityToggle={false} {...section('fog')}>
+          <p className="text-xs text-slate-400">
+            Linear distance fog fades terrain, props, and water into the horizon.
+          </p>
+
+          <label className="flex items-center gap-2 text-sm text-slate-300">
+            <input
+              type="checkbox"
+              checked={sceneAppearance.fog.enabled}
+              onChange={(event) => updateFog({ enabled: event.target.checked })}
+              disabled={isSavingScene}
+            />
+            Enable fog
+          </label>
+
+          <label className="flex items-center gap-2 text-sm text-slate-300">
+            <input
+              type="checkbox"
+              checked={sceneAppearance.fog.matchBackground}
+              onChange={(event) => updateFog({ matchBackground: event.target.checked })}
+              disabled={isSavingScene || !sceneAppearance.fog.enabled}
+            />
+            Match background color
+          </label>
+
+          {!sceneAppearance.fog.matchBackground && (
+            <label className="block text-xs text-slate-400">
+              Fog color
+              <input
+                type="color"
+                value={sceneAppearance.fog.color}
+                onChange={(event) => updateFog({ color: event.target.value })}
+                disabled={isSavingScene || !sceneAppearance.fog.enabled}
+                className="mt-1 h-9 w-full cursor-pointer rounded border border-slate-700 bg-slate-950 disabled:opacity-40"
+              />
+            </label>
+          )}
+
+          <label className="block text-xs text-slate-400">
+            Near distance — fade starts ({Math.round(sceneAppearance.fog.near)} units)
+            <input
+              type="range"
+              min={10}
+              max={300}
+              value={Math.round(sceneAppearance.fog.near)}
+              onChange={(event) => updateFog({ near: Number(event.target.value) })}
+              disabled={isSavingScene || !sceneAppearance.fog.enabled}
+              className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+            />
+          </label>
+
+          <label className="block text-xs text-slate-400">
+            Far distance — fully faded ({Math.round(sceneAppearance.fog.far)} units)
+            <input
+              type="range"
+              min={50}
+              max={500}
+              value={Math.round(sceneAppearance.fog.far)}
+              onChange={(event) => updateFog({ far: Number(event.target.value) })}
+              disabled={isSavingScene || !sceneAppearance.fog.enabled}
+              className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+            />
+          </label>
+
+          <button
+            type="button"
+            onClick={resetFog}
+            disabled={isSavingScene}
+            className="rounded-lg bg-slate-800 px-3 py-2 text-sm text-white disabled:opacity-40"
+          >
+            Reset fog defaults
+          </button>
+        </AdminSection>
+
+        <AdminSection
+          title="Water"
+          showVisibilityToggle={false}
+          {...section('water')}
+        >
+          <p className="text-xs text-slate-400">
+            Animated sea surface at a configurable level. Syncs with scene settings on Supabase.
+          </p>
+
+          <label className="flex items-center gap-2 text-sm text-slate-300">
+            <input
+              type="checkbox"
+              checked={sceneAppearance.water.enabled}
+              onChange={(event) => updateWater({ enabled: event.target.checked })}
+              disabled={isSavingScene}
+            />
+            Show water
+          </label>
+
+          <label className="block text-sm text-slate-300">
+            Water type
+            <select
+              value={sceneAppearance.water.style}
+              onChange={(event) =>
+                updateWater({ style: event.target.value as WaterSettings['style'] })
+              }
+              disabled={isSavingScene || !sceneAppearance.water.enabled}
+              className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white disabled:opacity-40"
+            >
+              {WATER_STYLE_OPTIONS.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block text-xs text-slate-400">
+            Sea plane size ({Math.round(sceneAppearance.water.planeSize)} units)
+            <input
+              type="range"
+              min={100}
+              max={2000}
+              step={10}
+              value={Math.round(sceneAppearance.water.planeSize)}
+              onChange={(event) => updateWater({ planeSize: Number(event.target.value) })}
+              disabled={isSavingScene || !sceneAppearance.water.enabled}
+              className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+            />
+          </label>
+
+          <label className="block text-xs text-slate-400">
+            Edge fade ({Math.round(sceneAppearance.water.edgeFade * 100)}%)
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={Math.round(sceneAppearance.water.edgeFade * 100)}
+              onChange={(event) => updateWater({ edgeFade: Number(event.target.value) / 100 })}
+              disabled={isSavingScene || !sceneAppearance.water.enabled}
+              className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+            />
+          </label>
+
+          <div className="grid grid-cols-2 gap-3">
+            <label className="text-xs text-slate-400">
+              Sea level (Y)
+              <input
+                type="number"
+                min={-2}
+                max={8}
+                step={0.05}
+                value={sceneAppearance.water.level}
+                onChange={(event) => updateWater({ level: Number(event.target.value) })}
+                disabled={isSavingScene || !sceneAppearance.water.enabled}
+                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-white disabled:opacity-40"
+              />
+            </label>
+            <label className="text-xs text-slate-400">
+              Water color
+              <input
+                type="color"
+                value={sceneAppearance.water.color}
+                onChange={(event) => updateWater({ color: event.target.value })}
+                disabled={isSavingScene || !sceneAppearance.water.enabled}
+                className="mt-1 h-9 w-full cursor-pointer rounded border border-slate-700 bg-slate-950 disabled:opacity-40"
+              />
+            </label>
+          </div>
+
+          <label className="block text-sm text-slate-300">
+            Mesh quality
+            <select
+              value={sceneAppearance.water.meshQuality}
+              onChange={(event) =>
+                updateWater({ meshQuality: event.target.value as WaterMeshQuality })
+              }
+              disabled={isSavingScene || !sceneAppearance.water.enabled}
+              className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white disabled:opacity-40"
+            >
+              {WATER_MESH_QUALITY_OPTIONS.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block text-xs text-slate-400">
+            Wave randomness ({Math.round(sceneAppearance.water.waveRandomness * 100)}%)
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={Math.round(sceneAppearance.water.waveRandomness * 100)}
+              onChange={(event) => updateWater({ waveRandomness: Number(event.target.value) / 100 })}
+              disabled={isSavingScene || !sceneAppearance.water.enabled}
+              className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+            />
+          </label>
+
+          <label className="block text-xs text-slate-400">
+            Wave seed ({Math.round(sceneAppearance.water.waveSeed)})
+            <input
+              type="range"
+              min={0}
+              max={999}
+              value={Math.round(sceneAppearance.water.waveSeed)}
+              onChange={(event) => updateWater({ waveSeed: Number(event.target.value) })}
+              disabled={isSavingScene || !sceneAppearance.water.enabled}
+              className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+            />
+          </label>
+
+          <label className="block text-sm text-slate-300">
+            Detail layers
+            <select
+              value={sceneAppearance.water.detailLayers}
+              onChange={(event) =>
+                updateWater({ detailLayers: Number(event.target.value) as WaterSettings['detailLayers'] })
+              }
+              disabled={isSavingScene || !sceneAppearance.water.enabled}
+              className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white disabled:opacity-40"
+            >
+              {WATER_DETAIL_LAYER_OPTIONS.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block text-xs text-slate-400">
+            Detail scale ({sceneAppearance.water.detailScale.toFixed(1)}×)
+            <input
+              type="range"
+              min={10}
+              max={100}
+              value={Math.round(sceneAppearance.water.detailScale * 10)}
+              onChange={(event) => updateWater({ detailScale: Number(event.target.value) / 10 })}
+              disabled={
+                isSavingScene || !sceneAppearance.water.enabled || sceneAppearance.water.detailLayers === 0
+              }
+              className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+            />
+          </label>
+
+          <label className="block text-xs text-slate-400">
+            Detail strength ({Math.round(sceneAppearance.water.detailStrength * 100)}%)
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={Math.round(sceneAppearance.water.detailStrength * 100)}
+              onChange={(event) => updateWater({ detailStrength: Number(event.target.value) / 100 })}
+              disabled={
+                isSavingScene || !sceneAppearance.water.enabled || sceneAppearance.water.detailLayers === 0
+              }
+              className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+            />
+          </label>
+
+          <label className="block text-xs text-slate-400">
+            Wave height ({sceneAppearance.water.waveHeight.toFixed(2)})
+            <input
+              type="range"
+              min={0}
+              max={200}
+              value={Math.round(sceneAppearance.water.waveHeight * 100)}
+              onChange={(event) => updateWater({ waveHeight: Number(event.target.value) / 100 })}
+              disabled={isSavingScene || !sceneAppearance.water.enabled}
+              className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+            />
+          </label>
+
+          <label className="block text-xs text-slate-400">
+            Wave intensity ({sceneAppearance.water.waveIntensity.toFixed(2)})
+            <input
+              type="range"
+              min={0}
+              max={400}
+              value={Math.round(sceneAppearance.water.waveIntensity * 100)}
+              onChange={(event) => updateWater({ waveIntensity: Number(event.target.value) / 100 })}
+              disabled={isSavingScene || !sceneAppearance.water.enabled}
+              className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+            />
+          </label>
+
+          <label className="block text-xs text-slate-400">
+            Animation speed ({sceneAppearance.water.animationSpeed.toFixed(2)}×)
+            <input
+              type="range"
+              min={0}
+              max={500}
+              value={Math.round(sceneAppearance.water.animationSpeed * 100)}
+              onChange={(event) => updateWater({ animationSpeed: Number(event.target.value) / 100 })}
+              disabled={isSavingScene || !sceneAppearance.water.enabled}
+              className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+            />
+          </label>
+
+          <label className="block text-xs text-slate-400">
+            Opacity ({Math.round(sceneAppearance.water.opacity * 100)}%)
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={Math.round(sceneAppearance.water.opacity * 100)}
+              onChange={(event) => updateWater({ opacity: Number(event.target.value) / 100 })}
+              disabled={isSavingScene || !sceneAppearance.water.enabled}
+              className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+            />
+          </label>
+
+          <div className="grid grid-cols-2 gap-3">
+            <label className="text-xs text-slate-400">
+              Metalness ({Math.round(sceneAppearance.water.metalness * 100)}%)
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={Math.round(sceneAppearance.water.metalness * 100)}
+                onChange={(event) => updateWater({ metalness: Number(event.target.value) / 100 })}
+                disabled={isSavingScene || !sceneAppearance.water.enabled}
+                className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+              />
+            </label>
+            <label className="text-xs text-slate-400">
+              Roughness ({Math.round(sceneAppearance.water.roughness * 100)}%)
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={Math.round(sceneAppearance.water.roughness * 100)}
+                onChange={(event) => updateWater({ roughness: Number(event.target.value) / 100 })}
+                disabled={isSavingScene || !sceneAppearance.water.enabled}
+                className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+              />
+            </label>
+          </div>
+
+          <button
+            type="button"
+            onClick={resetWater}
+            disabled={isSavingScene}
+            className="rounded-lg bg-slate-800 px-3 py-2 text-sm text-white disabled:opacity-40"
+          >
+            Reset water defaults
+          </button>
+        </AdminSection>
+
         <AdminSection
           title="History Controls"
           visible={settings.userVisibility.showUndoRedo}
           onToggleVisibility={() =>
             updateVisibility({ showUndoRedo: !settings.userVisibility.showUndoRedo })
           }
+          {...section('historyControls')}
         >
           <div className="flex gap-2">
             <button type="button" disabled={!canUndo} onClick={undo} className="rounded-lg bg-slate-800 px-3 py-2 text-sm text-white disabled:opacity-40">
@@ -212,6 +726,7 @@ export function AdminPanel() {
           onToggleVisibility={() =>
             updateVisibility({ showPlacementHints: !settings.userVisibility.showPlacementHints })
           }
+          {...section('mapOperations')}
         >
           <p className="mb-3 text-xs text-slate-400">
             Admin actions bypass rate limits and apply to the shared multiplayer map.
@@ -259,6 +774,7 @@ export function AdminPanel() {
           onToggleVisibility={() =>
             updateVisibility({ showPlacementHints: !settings.userVisibility.showPlacementHints })
           }
+          {...section('placementRules')}
         >
           <label className="mb-2 flex items-center gap-2 text-sm text-slate-300">
             <input
@@ -329,6 +845,7 @@ export function AdminPanel() {
           onToggleVisibility={() =>
             updateVisibility({ showPlacementHints: !settings.userVisibility.showPlacementHints })
           }
+          {...section('rateLimits')}
         >
           {isAdminSession && isMultiplayer && (
             <p className="mb-3 rounded-md border border-emerald-500/30 bg-emerald-950/40 px-2 py-1.5 text-xs text-emerald-200">
@@ -458,6 +975,7 @@ export function AdminPanel() {
           onToggleVisibility={() =>
             updateVisibility({ showZoneOverlays: !settings.userVisibility.showZoneOverlays })
           }
+          {...section('allowedZones')}
         >
           <label className="mb-3 flex items-center gap-2 text-sm text-slate-300">
             <input
@@ -510,6 +1028,7 @@ export function AdminPanel() {
           onToggleVisibility={() =>
             updateVisibility({ showPropToolbar: !settings.userVisibility.showPropToolbar })
           }
+          {...section('propLibrary')}
         >
           <div className="space-y-3">
             {settings.categories.map((category) => (

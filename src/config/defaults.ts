@@ -1,5 +1,6 @@
 import type { PropCategory, PropDefinition } from '../types/propLibrary'
 import type { RateLimitSettings, SandboxSettings } from '../types/sandbox'
+import { DEFAULT_SCENE_APPEARANCE } from './sceneAppearance'
 import { withPropDefaults } from './propDefaults'
 
 export const DEFAULT_CATEGORIES: PropCategory[] = [
@@ -145,6 +146,7 @@ export const DEFAULT_SANDBOX_SETTINGS: SandboxSettings = {
   },
   categories: DEFAULT_CATEGORIES,
   propLibrary: DEFAULT_PROP_LIBRARY,
+  sceneAppearance: DEFAULT_SCENE_APPEARANCE,
 }
 
 export const ADMIN_SESSION_KEY = 'manoel-admin-authenticated'

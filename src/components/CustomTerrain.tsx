@@ -2,6 +2,10 @@ import { useMemo, useRef } from 'react'
 import { useLoader, type ThreeEvent } from '@react-three/fiber'
 import * as THREE from 'three'
 import { HEIGHTMAP_URL, TERRAIN_MAX_HEIGHT, TERRAIN_SEGMENTS, TERRAIN_SIZE } from '../constants/terrain'
+import { useSandbox } from '../context/SandboxProvider'
+import { normalizeSceneAppearance } from '../config/sceneAppearance'
+import { createGridTexture } from '../utils/gridTexture'
+import { TerrainMaterial } from './TerrainMaterial'
 import {
   CLICK_DRAG_THRESHOLD_PX,
   isClickGesture,
@@ -9,41 +13,6 @@ import {
 } from '../utils/pointer'
 
 export { TERRAIN_SIZE, TERRAIN_SEGMENTS, TERRAIN_MAX_HEIGHT }
-
-const GRID_CELLS = 20
-
-function createGridTexture(size = 512, cells = GRID_CELLS): THREE.CanvasTexture {
-  const canvas = document.createElement('canvas')
-  canvas.width = size
-  canvas.height = size
-  const ctx = canvas.getContext('2d')!
-
-  ctx.fillStyle = '#0f172a'
-  ctx.fillRect(0, 0, size, size)
-
-  const step = size / cells
-  ctx.strokeStyle = '#38bdf8'
-  ctx.lineWidth = 2
-
-  for (let i = 0; i <= cells; i++) {
-    const pos = i * step
-    ctx.beginPath()
-    ctx.moveTo(pos, 0)
-    ctx.lineTo(pos, size)
-    ctx.stroke()
-    ctx.beginPath()
-    ctx.moveTo(0, pos)
-    ctx.lineTo(size, pos)
-    ctx.stroke()
-  }
-
-  const texture = new THREE.CanvasTexture(canvas)
-  texture.wrapS = THREE.RepeatWrapping
-  texture.wrapT = THREE.RepeatWrapping
-  texture.repeat.set(4, 4)
-  texture.colorSpace = THREE.SRGBColorSpace
-  return texture
-}
 
 function sampleHeightmap(
   imageData: ImageData,
@@ -110,9 +79,19 @@ export function CustomTerrain({
   onTouchPlacementStart,
   onTouchPlacementEnd,
 }: CustomTerrainProps) {
+  const { settings } = useSandbox()
+  const sceneAppearance = normalizeSceneAppearance(settings.sceneAppearance)
+  const { terrainFillColor, terrainFillOpacity, terrainGridColor, water } = sceneAppearance
   const heightmap = useLoader(THREE.TextureLoader, HEIGHTMAP_URL)
-  const gridTexture = useMemo(() => createGridTexture(), [])
+  const gridTexture = useMemo(
+    () => createGridTexture(terrainFillColor, terrainGridColor, terrainFillOpacity),
+    [terrainFillColor, terrainFillOpacity, terrainGridColor],
+  )
+  const terrainFillTransparent = terrainFillOpacity < 1
+  const clipUnderwater = water.enabled
   const pointerSessionRef = useRef<PointerSession | null>(null)
+
+  const isUnderwater = (point: THREE.Vector3) => water.enabled && point.y < water.level
 
   const updatePreview = (point: THREE.Vector3) => {
     onPreviewMove?.(point)
@@ -131,6 +110,8 @@ export function CustomTerrain({
   }
 
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
+    if (isUnderwater(event.point)) return
+
     pointerSessionRef.current = {
       x: event.clientX,
       y: event.clientY,
@@ -154,6 +135,7 @@ export function CustomTerrain({
 
   const handlePointerMove = (event: ThreeEvent<PointerEvent>) => {
     if (zoneDrawingMode || !placementEnabled) return
+    if (isUnderwater(event.point)) return
 
     const session = pointerSessionRef.current
     const touch = isTouchPointer(event.pointerType)
@@ -176,6 +158,7 @@ export function CustomTerrain({
     const session = pointerSessionRef.current
     pointerSessionRef.current = null
     if (!session) return
+    if (isUnderwater(event.point)) return
 
     if (isTouchPointer(session.pointerType)) {
       onTouchPlacementEnd?.()
@@ -264,7 +247,12 @@ export function CustomTerrain({
       onPointerLeave={handlePointerLeave}
       onPointerCancel={clearPointerSession}
     >
-      <meshStandardMaterial map={gridTexture} side={THREE.DoubleSide} />
+      <TerrainMaterial
+        map={gridTexture}
+        seaLevel={water.level}
+        clipUnderwater={clipUnderwater}
+        terrainFillTransparent={terrainFillTransparent}
+      />
     </mesh>
   )
 }

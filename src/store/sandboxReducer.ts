@@ -1,6 +1,7 @@
 import type { PlacedProp } from '../types/props'
 import type { SandboxSettings } from '../types/sandbox'
 import { DEFAULT_SANDBOX_SETTINGS } from '../config/defaults'
+import { normalizeSceneAppearance } from '../config/sceneAppearance'
 
 type PropHistory = {
   past: PlacedProp[][]
@@ -114,6 +115,20 @@ export function sandboxReducer(state: SandboxState, action: SandboxAction): Sand
                 },
               }
             : state.settings.rateLimit,
+          sceneAppearance: action.patch.sceneAppearance
+            ? normalizeSceneAppearance({
+                ...state.settings.sceneAppearance,
+                ...action.patch.sceneAppearance,
+                water: {
+                  ...state.settings.sceneAppearance?.water,
+                  ...action.patch.sceneAppearance.water,
+                },
+                fog: {
+                  ...state.settings.sceneAppearance?.fog,
+                  ...action.patch.sceneAppearance.fog,
+                },
+              })
+            : state.settings.sceneAppearance ?? DEFAULT_SANDBOX_SETTINGS.sceneAppearance,
         },
       }
 
