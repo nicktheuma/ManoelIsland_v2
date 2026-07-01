@@ -208,6 +208,14 @@ function signedArea(loop: ShorelinePoint[]): number {
   return area * 0.5
 }
 
+/** Coarser grid for large heightmaps — keeps contour shape, cuts CPU cost ~stride². */
+function contourStride(width: number, height: number): number {
+  const cells = Math.max(1, width - 1) * Math.max(1, height - 1)
+  if (cells > 200 * 200) return 4
+  if (cells > 128 * 128) return 2
+  return 1
+}
+
 /**
  * Extract the shoreline where emergent terrain meets water at the water plane,
  * including the crop boundary where terrain ends and open water begins.
@@ -226,12 +234,15 @@ export function computeWaterShorelineContour(
 
   const landThreshold = waterWorldY - 0.02
   const segments: Array<[ShorelinePoint, ShorelinePoint]> = []
+  const stride = contourStride(width, height)
 
-  for (let row = 0; row < height - 1; row += 1) {
-    for (let col = 0; col < width - 1; col += 1) {
+  for (let row = 0; row < height - 1; row += stride) {
+    for (let col = 0; col < width - 1; col += stride) {
+      const colR = Math.min(col + stride, width - 1)
+      const rowB = Math.min(row + stride, height - 1)
       const tl = cornerAt(col, row, width, height, imageData, alignment, elevationCtx, polygon, waterWorldY)
       const tr = cornerAt(
-        col + 1,
+        colR,
         row,
         width,
         height,
@@ -242,8 +253,8 @@ export function computeWaterShorelineContour(
         waterWorldY,
       )
       const br = cornerAt(
-        col + 1,
-        row + 1,
+        colR,
+        rowB,
         width,
         height,
         imageData,
@@ -254,7 +265,7 @@ export function computeWaterShorelineContour(
       )
       const bl = cornerAt(
         col,
-        row + 1,
+        rowB,
         width,
         height,
         imageData,

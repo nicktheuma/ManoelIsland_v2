@@ -165,8 +165,12 @@ export function waterStyleIndex(style: WaterStyleId): number {
   }
 }
 
+/** Cap vertex count — water shader is heavy per-vertex. */
+export const WATER_MESH_SEGMENTS_CAP = 224
+
 export function waterMeshSegments(quality: WaterMeshQuality): number {
-  return WATER_MESH_QUALITY_OPTIONS.find((option) => option.id === quality)?.segments ?? 96
+  const raw = WATER_MESH_QUALITY_OPTIONS.find((option) => option.id === quality)?.segments ?? 96
+  return Math.min(raw, WATER_MESH_SEGMENTS_CAP)
 }
 
 const WATER_DEFAULTS_STORAGE_KEY = 'manoel-water-defaults-v1'

@@ -257,7 +257,7 @@ export function AnimatedWater({
     let cancelled = false
     const settingsChanged = lastShorelineSettingsKeyRef.current !== shorelineSettingsKey
     lastShorelineSettingsKeyRef.current = shorelineSettingsKey
-    const delay = settingsChanged ? 0 : 450
+    const delay = settingsChanged ? 0 : 900
 
     const timer = window.setTimeout(() => {
       if (cancelled) return
@@ -284,7 +284,6 @@ export function AnimatedWater({
       window.clearTimeout(timer)
     }
   }, [
-    imageData,
     imageDataGeneration,
     shorelineSettingsKey,
     terrainAlignment,
@@ -319,12 +318,6 @@ export function AnimatedWater({
   }, [water.animationSpeed])
 
   useEffect(() => {
-    if (!uniformsRef.current) return
-    uniformsRef.current.uTerrainEdgeVertexCount.value = packedTerrainEdge.count
-    applyTerrainEdgeVertices(uniformsRef.current.uTerrainEdgeCoords, packedTerrainEdge)
-  }, [packedTerrainEdge])
-
-  useEffect(() => {
     const material = materialRef.current
     if (!material) return
 
@@ -353,6 +346,13 @@ export function AnimatedWater({
     settings.sceneAppearance.terrain.layerNudges.heightmap,
     packedTerrainEdge,
   ])
+
+  useEffect(() => {
+    if (uniformsRef.current) {
+      uniformsRef.current.uTerrainEdgeVertexCount.value = packedTerrainEdge.count
+      applyTerrainEdgeVertices(uniformsRef.current.uTerrainEdgeCoords, packedTerrainEdge)
+    }
+  }, [packedTerrainEdge])
 
   useFrame((state) => {
     const material = materialRef.current

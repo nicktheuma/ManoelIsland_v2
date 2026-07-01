@@ -449,13 +449,17 @@ export function TerrainHeightmapProvider({ children }: { children: ReactNode }) 
   )
 
   useEffect(() => {
-    if (!imageData) {
+    if (!terrain.osmFeaturesEnabled) {
       setOsmFeatures(null)
       return
     }
-    void loadOsmFeatures(terrain, imageData)
+    const data = imageDataRef.current
+    if (!data) {
+      setOsmFeatures(null)
+      return
+    }
+    void loadOsmFeatures(terrain, data)
   }, [
-    imageData,
     loadOsmFeatures,
     terrain.osmFeaturesEnabled,
     terrain.osmFeaturesVersion,

@@ -34,18 +34,36 @@ export function useSculptPointerHandlers({
     }
   }, [])
 
+  const previewRafRef = useRef<number | null>(null)
+  const pendingPreviewRef = useRef<{ x: number; z: number; visible: boolean } | null>(null)
+
   const previewAt = useCallback(
     (x: number, z: number, visible: boolean) => {
-      if (!visible || !sculptTool) {
-        setBrushPreview(null)
-        return
-      }
-      const terrainY = getHeightAt(x, z)
-      setBrushPreview(
-        sculptBrushPreviewPosition(x, z, terrainY, waterClipLevel, waterEnabled),
-      )
+      pendingPreviewRef.current = { x, z, visible }
+      if (previewRafRef.current !== null) return
+
+      previewRafRef.current = window.requestAnimationFrame(() => {
+        previewRafRef.current = null
+        const pending = pendingPreviewRef.current
+        if (!pending) return
+        if (!pending.visible || !sculptTool) {
+          setBrushPreview(null)
+          return
+        }
+        const terrainY = getHeightAt(pending.x, pending.z)
+        setBrushPreview(
+          sculptBrushPreviewPosition(pending.x, pending.z, terrainY, waterClipLevel, waterEnabled),
+        )
+      })
     },
     [getHeightAt, sculptTool, setBrushPreview, waterClipLevel, waterEnabled],
+  )
+
+  useEffect(
+    () => () => {
+      if (previewRafRef.current !== null) window.cancelAnimationFrame(previewRafRef.current)
+    },
+    [],
   )
 
   const runStroke = useCallback(

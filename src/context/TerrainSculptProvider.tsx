@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useRef,
+  useMemo,
   useState,
   type ReactNode,
 } from 'react'
@@ -156,7 +157,7 @@ export function TerrainSculptProvider({ children }: { children: ReactNode }) {
       saveTimerRef.current = window.setTimeout(() => {
         saveTimerRef.current = null
         persistHeightmap(data, terrain.sculptVersion + 1)
-      }, 400)
+      }, 1200)
     },
     [persistHeightmap, terrain.sculptVersion],
   )
@@ -451,10 +452,7 @@ export function TerrainSculptProvider({ children }: { children: ReactNode }) {
           filter: `terrain_key=eq.${terrainKey}`,
         },
         (payload) => {
-          const stroke = rowToSculptStroke(payload.new as TerrainSculptStrokeRow)
-          if (replayStroke(stroke)) {
-            schedulePersist(imageDataRef.current!)
-          }
+          replayStroke(rowToSculptStroke(payload.new as TerrainSculptStrokeRow))
         },
       )
       .subscribe()
@@ -464,20 +462,31 @@ export function TerrainSculptProvider({ children }: { children: ReactNode }) {
     return () => {
       void client.removeChannel(channel)
     }
-  }, [isMultiplayer, replayStroke, schedulePersist, terrainKey])
+  }, [isMultiplayer, replayStroke, terrainKey])
 
-  const value: TerrainSculptContextValue = {
-    brush,
-    setBrush,
-    applyStroke,
-    sculptError,
-    setSculptError,
-    isSculpting,
-    setBrushPreview,
-    brushPreviewRef,
-    subscribeBrushPreview,
-    resetAllSculpting,
-  }
+  const value = useMemo<TerrainSculptContextValue>(
+    () => ({
+      brush,
+      setBrush,
+      applyStroke,
+      sculptError,
+      setSculptError,
+      isSculpting,
+      setBrushPreview,
+      brushPreviewRef,
+      subscribeBrushPreview,
+      resetAllSculpting,
+    }),
+    [
+      applyStroke,
+      brush,
+      isSculpting,
+      resetAllSculpting,
+      sculptError,
+      setBrushPreview,
+      subscribeBrushPreview,
+    ],
+  )
 
   return <TerrainSculptContext.Provider value={value}>{children}</TerrainSculptContext.Provider>
 }

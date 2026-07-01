@@ -3,6 +3,8 @@ import { normalizeSceneAppearance } from '../config/sceneAppearance'
 import type { SceneAppearance } from '../types/sandbox'
 
 const SCENE_SYNC_MS = 1000
+/** Debounce live sandbox updates while dragging admin sliders. */
+const SANDBOX_COMMIT_MS = 250
 
 type UseAdminSceneAppearanceDraftOptions = {
   committed: SceneAppearance
@@ -30,6 +32,7 @@ export function useAdminSceneAppearanceDraft({
 }: UseAdminSceneAppearanceDraftOptions) {
   const [draft, setDraft] = useState(() => normalizeSceneAppearance(committed))
   const syncTimerRef = useRef<number | null>(null)
+  const sandboxCommitTimerRef = useRef<number | null>(null)
   const latestDraftRef = useRef(draft)
   const isCommittingRef = useRef(false)
 
@@ -44,17 +47,30 @@ export function useAdminSceneAppearanceDraft({
   useEffect(
     () => () => {
       if (syncTimerRef.current) window.clearTimeout(syncTimerRef.current)
+      if (sandboxCommitTimerRef.current) window.clearTimeout(sandboxCommitTimerRef.current)
     },
     [],
   )
 
   const applyToSandbox = useCallback(
-    (normalized: SceneAppearance) => {
-      isCommittingRef.current = true
-      patchSettings({ sceneAppearance: normalized })
-      window.requestAnimationFrame(() => {
-        isCommittingRef.current = false
-      })
+    (normalized: SceneAppearance, immediate: boolean) => {
+      if (sandboxCommitTimerRef.current) window.clearTimeout(sandboxCommitTimerRef.current)
+
+      const commit = () => {
+        sandboxCommitTimerRef.current = null
+        isCommittingRef.current = true
+        patchSettings({ sceneAppearance: normalized })
+        window.requestAnimationFrame(() => {
+          isCommittingRef.current = false
+        })
+      }
+
+      if (immediate) {
+        commit()
+        return
+      }
+
+      sandboxCommitTimerRef.current = window.setTimeout(commit, SANDBOX_COMMIT_MS)
     },
     [patchSettings],
   )
@@ -83,7 +99,7 @@ export function useAdminSceneAppearanceDraft({
       const normalized = normalizeSceneAppearance(next)
       setDraft(normalized)
       latestDraftRef.current = normalized
-      applyToSandbox(normalized)
+      applyToSandbox(normalized, options?.immediate ?? false)
       scheduleServerSync(normalized, options?.immediate ?? false)
     },
     [applyToSandbox, scheduleServerSync],

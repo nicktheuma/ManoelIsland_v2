@@ -1,4 +1,4 @@
-import { useMemo, useRef, useEffect } from 'react'
+import { useMemo, useRef, useEffect, useState } from 'react'
 
 import { type ThreeEvent } from '@react-three/fiber'
 
@@ -78,7 +78,12 @@ function displaceGeometry(
 
   const uvAttr = geometry.attributes.uv
 
-  const insideAttr = new Float32Array(positions.count)
+  let insideAttr = geometry.getAttribute('aInside') as THREE.BufferAttribute | undefined
+  if (!insideAttr || insideAttr.count !== positions.count) {
+    insideAttr = new THREE.BufferAttribute(new Float32Array(positions.count), 1)
+    geometry.setAttribute('aInside', insideAttr)
+  }
+  const insideArray = insideAttr.array as Float32Array
 
 
 
@@ -110,7 +115,7 @@ function displaceGeometry(
 
 
 
-    insideAttr[i] = inside ? 1 : 0
+    insideArray[i] = inside ? 1 : 0
 
 
 
@@ -128,14 +133,10 @@ function displaceGeometry(
 
 
 
-  geometry.setAttribute('aInside', new THREE.BufferAttribute(insideAttr, 1))
-
+  insideAttr.needsUpdate = true
   positions.needsUpdate = true
-
   uvAttr.needsUpdate = true
-
   geometry.computeVertexNormals()
-
 }
 
 
@@ -216,10 +217,13 @@ export function CustomTerrain({
 
   const sculptTool = sculptEnabled ? sculptToolFromMode(mode) : null
 
-  const { imageData, surfaceCanvas, elevationContext, terrainAlignment, seaLevelWorldY } =
+  const { imageData, surfaceCanvas, elevationContext, terrainAlignment, seaLevelWorldY, imageDataGeneration } =
     useTerrainHeightmap()
 
-  const sceneAppearance = normalizeSceneAppearance(settings.sceneAppearance)
+  const sceneAppearance = useMemo(
+    () => normalizeSceneAppearance(settings.sceneAppearance),
+    [settings.sceneAppearance],
+  )
 
   const { terrainFillColor, terrainFillOpacity, terrainGridColor, water, terrain } = sceneAppearance
 
@@ -624,25 +628,61 @@ export function CustomTerrain({
 
   const polygonKey = terrain.polygon.map(([lat, lng]) => `${lat},${lng}`).join('|')
 
+  const meshBaseKey = `${terrainGeoKey}|${polygonKey}|${terrain.meshQuality}|${meshExtents.width}|${meshExtents.depth}`
 
+  const displacedGeoRef = useRef<THREE.PlaneGeometry | null>(null)
+  const meshBaseKeyRef = useRef('')
+  const [meshRevision, setMeshRevision] = useState(0)
 
-  const displacedGeometry = useMemo(() => {
+  useEffect(() => {
+    if (!imageData) {
+      displacedGeoRef.current?.dispose()
+      displacedGeoRef.current = null
+      meshBaseKeyRef.current = ''
+      setMeshRevision((revision) => revision + 1)
+      return
+    }
 
-    if (!imageData) return null
+    const needsNewShell = !displacedGeoRef.current || meshBaseKeyRef.current !== meshBaseKey
+    if (needsNewShell) {
+      displacedGeoRef.current?.dispose()
+      displacedGeoRef.current = geometry.clone()
+      meshBaseKeyRef.current = meshBaseKey
+    }
 
+    displaceGeometry(
+      displacedGeoRef.current!,
+      imageData,
+      terrainAlignment,
+      elevationContext,
+      terrain.polygon,
+    )
+    setMeshRevision((revision) => revision + 1)
+  }, [
+    meshBaseKey,
+    imageDataGeneration,
+    imageData,
+    geometry,
+    terrainAlignment,
+    elevationContext,
+    terrain.polygon,
+  ])
 
+  useEffect(
+    () => () => {
+      displacedGeoRef.current?.dispose()
+      displacedGeoRef.current = null
+    },
+    [],
+  )
 
-    const geo = geometry.clone()
-
-    displaceGeometry(geo, imageData, terrainAlignment, elevationContext, terrain.polygon)
-
-    return geo
-
-  }, [geometry, imageData, elevationContext, terrainAlignment, terrainGeoKey, terrain.meshQuality, polygonKey, terrain.polygon, heightmapNudge.x, heightmapNudge.y, heightmapNudge.scaleX, heightmapNudge.scaleY])
+  const displacedGeometry = displacedGeoRef.current
 
 
 
   if (!displacedGeometry) return null
+
+  void meshRevision
 
 
 
