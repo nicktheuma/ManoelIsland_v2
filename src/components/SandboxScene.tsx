@@ -2,14 +2,17 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import { Canvas } from '@react-three/fiber'
 import { Environment } from '@react-three/drei'
 import * as THREE from 'three'
-import { isHdriPreset, normalizeSceneAppearance } from '../config/sceneAppearance'
+import { isHdriPreset, sceneAppearanceForRender } from '../config/sceneAppearance'
 import { AdminLoginModal } from './admin/AdminLoginModal'
 import { AdminPanel } from './admin/AdminPanel'
 import { CustomTerrain } from './CustomTerrain'
+import { SurroundTerrain } from './SurroundTerrain'
 import { AnimatedWater } from './AnimatedWater'
+import { OsmFeatureLayer } from './OsmFeatureLayer'
 import { SceneFog } from './SceneFog'
 import { PlacedPropsLayer } from './PlacedPropsLayer'
 import { PropPreviewOutline } from './PropPreviewOutline'
+import { SculptBrushPreview } from './SculptBrushPreview'
 import { PropEditPanel } from './PropEditPanel'
 import { PropToolbar } from './PropToolbar'
 import { SnapGridOverlay } from './SnapGridOverlay'
@@ -21,12 +24,15 @@ import { PlacementPreviewProvider, usePlacementPreview } from '../context/Placem
 import { TerrainHeightProvider, useTerrainHeight } from '../context/TerrainHeightProvider'
 import { previewPlacementPosition, getUserPlaceableProps } from '../utils/placementRules'
 import { isCoarsePointerDevice } from '../utils/pointer'
-import { RateLimitOverlay } from './PlacedPropsLayer'
-import { TerrainHeightmapProvider } from '../context/TerrainHeightmapProvider'
+import { RateLimitOverlay, SculptRateLimitOverlay } from './PlacedPropsLayer'
+import { TerrainHeightmapProvider, useTerrainHeightmap } from '../context/TerrainHeightmapProvider'
+import { TerrainSculptProvider } from '../context/TerrainSculptProvider'
+import { waterSurfaceWorldY } from '../utils/terrainLayerNudge'
 import { SandboxOrbitControls } from './SceneCamera'
 import { useAdminShortcut } from '../hooks/useAdminShortcut'
 import { useSandboxShortcuts } from '../hooks/useSandboxShortcuts'
-import { isEditMode, isPlacementMode, type InteractionMode } from '../types/interaction'
+import { isEditMode, isPlacementMode, isSculptMode, sculptToolFromMode, type InteractionMode } from '../types/interaction'
+import { useTerrainSculpt } from '../context/TerrainSculptProvider'
 
 type SandboxCanvasProps = {
   mode: InteractionMode
@@ -37,6 +43,7 @@ type SandboxCanvasProps = {
   onPlaceConfirm: (point?: THREE.Vector3) => void
   onTouchPlacementStart: () => void
   onTouchPlacementEnd: () => void
+  sculptEnabled: boolean
 }
 
 function PreviewPlacementSync({
@@ -86,6 +93,7 @@ function SandboxCanvas({
   onPlaceConfirm,
   onTouchPlacementStart,
   onTouchPlacementEnd,
+  sculptEnabled,
 }: SandboxCanvasProps) {
   const { selectedPropId, selectProp, settings } = useSandbox()
   const { zoneDrawingMode, addDraftZonePoint } = useAdmin()
@@ -93,28 +101,37 @@ function SandboxCanvas({
   const settingsRef = useRef(settings)
   settingsRef.current = settings
   const { getHeightAt } = useTerrainHeight()
+  const { osmFeatures, seaLevelWorldY } = useTerrainHeightmap()
 
-  const sceneAppearance = normalizeSceneAppearance(settings.sceneAppearance)
-  const { backgroundColor, hdriPreset, camera } = sceneAppearance
+  const sceneAppearance = sceneAppearanceForRender(settings.sceneAppearance)
+  const { backgroundColor, hdriPreset, camera, terrain } = sceneAppearance
+  const waterClipLevel = waterSurfaceWorldY(seaLevelWorldY, terrain.layerNudges.water, sceneAppearance.water.level)
 
   const placementMode = isPlacementMode(mode)
   const editMode = isEditMode(mode)
+  const sculptMode = isSculptMode(mode) && settings.userVisibility.showSculptTools
+  const sculptActive = sculptMode && sculptEnabled
+  const activeSculptTool = sculptActive ? sculptToolFromMode(mode) : null
+  const reservePrimaryPointer = (placementMode || sculptMode || editMode) && !zoneDrawingMode
+  const { setBrushPreview } = useTerrainSculpt()
+
+  useEffect(() => {
+    if (!sculptActive) setBrushPreview(null)
+  }, [sculptActive, setBrushPreview])
 
   const handlePreviewMove = useCallback(
     (point: THREE.Vector3, valid: boolean) => {
       if (!isPlacementMode(mode)) return
       const raw = propPositionFromPoint(point)
-      const { water } = normalizeSceneAppearance(settingsRef.current.sceneAppearance)
-
       if (!valid) {
-        setPreview([raw[0], water.level, raw[2]], false)
+        setPreview([raw[0], waterClipLevel, raw[2]], false)
         return
       }
 
       const snapped = previewPlacementPosition(raw, settingsRef.current, getHeightAt)
       setPreview(snapped, true)
     },
-    [getHeightAt, mode, setPreview],
+    [getHeightAt, mode, waterClipLevel, setPreview],
   )
 
   const handlePreviewLeave = useCallback(() => {
@@ -154,11 +171,14 @@ function SandboxCanvas({
       />
 
       <Suspense fallback={null}>
+        <SurroundTerrain />
         <CustomTerrain
           zoneDrawingMode={zoneDrawingMode}
           placementEnabled={placementMode && !zoneDrawingMode}
           editMode={editMode && !zoneDrawingMode}
-          onPreviewMove={handlePreviewMove}
+          mode={mode}
+        sculptEnabled={sculptActive}
+        onPreviewMove={handlePreviewMove}
           onPreviewLeave={handlePreviewLeave}
           onPlaceConfirm={handlePlaceConfirm}
           onEditModeTerrainClick={() => selectProp(null)}
@@ -173,13 +193,25 @@ function SandboxCanvas({
 
       {placementMode && !zoneDrawingMode && <PropPreviewOutline radius={previewRadius} />}
 
+      {sculptActive && activeSculptTool && <SculptBrushPreview tool={activeSculptTool} />}
+
       <PlacedPropsLayer
         selectedPropId={selectedPropId}
         onSelect={selectProp}
         selectionEnabled={editMode}
       />
 
-      <SandboxOrbitControls camera={camera} enabled={orbitEnabled} />
+      <OsmFeatureLayer
+        data={osmFeatures}
+        enabled={terrain.osmFeaturesEnabled}
+        nudge={terrain.layerNudges.osm}
+      />
+
+      <SandboxOrbitControls
+        camera={camera}
+        enabled={orbitEnabled}
+        reservePrimaryPointer={reservePrimaryPointer}
+      />
     </>
   )
 }
@@ -193,10 +225,11 @@ function SandboxCanvasRoot(props: SandboxCanvasProps) {
 }
 
 function SandboxExperience() {
-  const { settings, placeProp, getPropDefinition, selectProp, clearPlacementError, isMultiplayerLoading } =
+  const { settings, placeProp, getPropDefinition, selectProp, clearPlacementError, isMultiplayerLoading, isLayoutLocked } =
     useSandbox()
+  const { isAdmin } = useAdmin()
   const { setPreview } = usePlacementPreview()
-  const sceneAppearance = normalizeSceneAppearance(settings.sceneAppearance)
+  const sceneAppearance = sceneAppearanceForRender(settings.sceneAppearance)
   const isTouchDevice = useMemo(() => isCoarsePointerDevice(), [])
 
   const placeableProps = useMemo(() => getUserPlaceableProps(settings), [settings])
@@ -227,6 +260,9 @@ function SandboxExperience() {
   const selectedDefinition = getPropDefinition(selectedLibraryPropId)
   const previewRadius = (selectedDefinition?.placement.colliderRadius ?? 1.5) * (selectedDefinition?.defaultScale ?? 1)
 
+  const sculptBlocked = isLayoutLocked && !isAdmin
+  const sculptEnabled = !sculptBlocked
+
   const handleModeChange = useCallback(
     (nextMode: InteractionMode) => {
       setMode(nextMode)
@@ -236,6 +272,12 @@ function SandboxExperience() {
     },
     [clearPlacementError, selectProp],
   )
+
+  useEffect(() => {
+    if (!settings.userVisibility.showSculptTools && isSculptMode(mode)) {
+      setMode('placement')
+    }
+  }, [mode, settings.userVisibility.showSculptTools])
 
   const handlePlaceConfirm = useCallback(
     async (point?: THREE.Vector3) => {
@@ -258,8 +300,8 @@ function SandboxExperience() {
         camera={{
           position: sceneAppearance.camera.position,
           fov: sceneAppearance.camera.fov,
-          near: 0.1,
-          far: 500,
+          near: sceneAppearance.camera.near,
+          far: sceneAppearance.camera.far,
         }}
         onPointerMissed={() => {
           if (isPlacementMode(mode)) setPreview(null)
@@ -275,6 +317,7 @@ function SandboxExperience() {
           onPlaceConfirm={handlePlaceConfirm}
           onTouchPlacementStart={() => setOrbitEnabled(false)}
           onTouchPlacementEnd={() => setOrbitEnabled(true)}
+          sculptEnabled={sculptEnabled}
         />
       </Canvas>
 
@@ -290,6 +333,7 @@ function SandboxExperience() {
 
       <PropEditPanel mode={mode} />
       <RateLimitOverlay />
+      <SculptRateLimitOverlay />
       {isMultiplayerLoading && (
         <div className="pointer-events-none absolute inset-x-0 top-4 z-20 flex justify-center">
           <div className="rounded bg-slate-900/80 px-3 py-1 text-xs text-slate-300 backdrop-blur">
@@ -306,9 +350,11 @@ function SandboxExperience() {
 export function SandboxScene() {
   return (
     <TerrainHeightmapProvider>
-      <PlacementPreviewProvider>
-        <SandboxExperience />
-      </PlacementPreviewProvider>
+      <TerrainSculptProvider>
+        <PlacementPreviewProvider>
+          <SandboxExperience />
+        </PlacementPreviewProvider>
+      </TerrainSculptProvider>
     </TerrainHeightmapProvider>
   )
 }

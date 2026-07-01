@@ -1,14 +1,14 @@
 import { useLayoutEffect } from 'react'
 import { useThree } from '@react-three/fiber'
 import * as THREE from 'three'
-import { normalizeSceneAppearance } from '../config/sceneAppearance'
+import { sceneAppearanceForRender } from '../config/sceneAppearance'
 import { resolveFogColor } from '../config/fogSettings'
 import { useSandbox } from '../context/SandboxProvider'
 
 export function SceneFog() {
   const { scene } = useThree()
   const { settings } = useSandbox()
-  const appearance = normalizeSceneAppearance(settings.sceneAppearance)
+  const appearance = sceneAppearanceForRender(settings.sceneAppearance)
 
   useLayoutEffect(() => {
     const { fog, backgroundColor } = appearance
@@ -19,7 +19,13 @@ export function SceneFog() {
     }
 
     const color = resolveFogColor(fog, backgroundColor)
-    scene.fog = new THREE.Fog(color, fog.near, fog.far)
+    if (scene.fog instanceof THREE.Fog) {
+      scene.fog.color.set(color)
+      scene.fog.near = fog.near
+      scene.fog.far = fog.far
+    } else {
+      scene.fog = new THREE.Fog(color, fog.near, fog.far)
+    }
 
     return () => {
       scene.fog = null

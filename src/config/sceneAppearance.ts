@@ -1,7 +1,7 @@
 import type { HdriPresetId, SceneAppearance } from '../types/sandbox'
 import { DEFAULT_CAMERA_SETTINGS, normalizeCameraSettings } from './cameraSettings'
 import { DEFAULT_TERRAIN_SETTINGS, normalizeTerrainSettings } from './terrainSettings'
-import { DEFAULT_FOG_SETTINGS, normalizeFogSettings } from './fogSettings'
+import { DEFAULT_FOG_SETTINGS, effectiveCameraFarForFog, normalizeFogSettings } from './fogSettings'
 import { DEFAULT_WATER_SETTINGS, normalizeWaterSettings } from './waterSettings'
 
 export const DEFAULT_SCENE_APPEARANCE: SceneAppearance = {
@@ -71,4 +71,21 @@ export function normalizeSceneAppearance(
 function clampOpacity(value: number): number {
   if (!Number.isFinite(value)) return DEFAULT_SCENE_APPEARANCE.terrainFillOpacity
   return Math.min(1, Math.max(0, value))
+}
+
+/** Normalized appearance with render-time camera far extended to cover fog distance. */
+export function sceneAppearanceForRender(
+  value: Partial<SceneAppearance> | null | undefined,
+): SceneAppearance {
+  const normalized = normalizeSceneAppearance(value)
+  const cameraFar = effectiveCameraFarForFog(normalized.camera.far, normalized.fog)
+  if (cameraFar === normalized.camera.far) return normalized
+
+  return {
+    ...normalized,
+    camera: normalizeCameraSettings({
+      ...normalized.camera,
+      far: cameraFar,
+    }),
+  }
 }

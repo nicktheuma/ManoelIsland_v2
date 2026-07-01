@@ -30,6 +30,7 @@ export type SandboxAction =
   | { type: 'UNDO' }
   | { type: 'REDO' }
   | { type: 'LOAD'; props: PlacedProp[]; settings?: SandboxSettings }
+  | { type: 'SET_PROPS'; props: PlacedProp[] }
 
 const MAX_HISTORY = 50
 
@@ -181,6 +182,13 @@ export function sandboxReducer(state: SandboxState, action: SandboxAction): Sand
         props: { past: [], present: action.props, future: [] },
         settings: action.settings ?? state.settings,
         selectedPropId: null,
+        placementError: null,
+      }
+
+    case 'SET_PROPS':
+      return {
+        ...state,
+        props: { ...state.props, present: action.props },
         placementError: null,
       }
 

@@ -5,7 +5,7 @@ import {
   type GeoBounds,
   type LatLng,
 } from './geo'
-import { geoBoundsFromReference, latLngFromGlobalPixel } from './geoReference'
+import { geoBoundsFromReference, latLngFromRasterPixel } from './geoReference'
 import type { TerrainGeoReference } from '../types/sandbox'
 
 type TileKey = string
@@ -123,7 +123,7 @@ export async function buildMaskedRasterSurface(
 
   for (let row = 0; row < size; row++) {
     for (let col = 0; col < size; col++) {
-      const [lat, lng] = latLngFromGlobalPixel(col, row, size, geo)
+      const [lat, lng] = latLngFromRasterPixel(col, row, size, geo)
       const offset = (row * size + col) * 4
 
       if (!pointInPolygon(lat, lng, polygon)) {

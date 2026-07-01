@@ -1,24 +1,57 @@
 import { useState, useEffect, useMemo } from 'react'
 import { getAdminPassword } from '../../config/defaults'
 import { DEFAULT_CAMERA_SETTINGS } from '../../config/cameraSettings'
-import { DEFAULT_FOG_SETTINGS } from '../../config/fogSettings'
+import { DEFAULT_FOG_SETTINGS, FOG_FAR_MAX, FOG_FAR_MIN, FOG_NEAR_MAX, FOG_NEAR_MIN } from '../../config/fogSettings'
 import { DEFAULT_SCENE_APPEARANCE, HDRI_OPTIONS, normalizeSceneAppearance } from '../../config/sceneAppearance'
 import {
   DEFAULT_TERRAIN_SETTINGS,
   MANOEL_ISLAND_POLYGON,
   TERRAIN_SAMPLE_SIZE_OPTIONS,
+  TERRAIN_SURFACE_SAMPLE_SIZE_OPTIONS,
   TERRAIN_SURFACE_STYLE_OPTIONS,
+  TERRAIN_MESH_QUALITY_OPTIONS,
 } from '../../config/terrainSettings'
-import { DEFAULT_WATER_SETTINGS, WATER_DETAIL_LAYER_OPTIONS, WATER_MESH_QUALITY_OPTIONS, WATER_STYLE_OPTIONS } from '../../config/waterSettings'
+import {
+  getDefaultWaterSettings,
+  saveWaterSettingsAsDefaults,
+  WATER_DETAIL_LAYER_OPTIONS,
+  WATER_DETAIL_SCALE_MAX,
+  WATER_DETAIL_SCALE_MIN,
+  WATER_DISTORTION_MAX,
+  WATER_DISTORTION_SLIDER_SCALE,
+  WATER_DISTORTION_SPEED_MAX,
+  WATER_EDGE_RIPPLE_FALLOFF_MAX,
+  WATER_EDGE_RIPPLE_MAX_DISTANCE_MAX,
+  WATER_EDGE_RIPPLE_SPEED_MAX,
+  WATER_EDGE_RIPPLE_WAVE_SCALE_MAX,
+  WATER_EDGE_RIPPLE_WAVE_SCALE_MIN,
+  WATER_SHORELINE_FADE_DISTANCE_MAX,
+  WATER_MESH_QUALITY_OPTIONS,
+  WATER_NORMAL_LAYER_OPTIONS,
+  WATER_NORMAL_LAYER_STRENGTH_MAX,
+  WATER_NORMAL_LAYER_STRETCH_MAX,
+  WATER_NORMAL_LAYER_STRETCH_MIN,
+  WATER_NORMAL_MAP_SCALE_MAX,
+  WATER_NORMAL_MAP_SCALE_MIN,
+  WATER_NORMAL_MAP_SPEED_MAX,
+  WATER_NORMAL_COLOR_SCALE_MAX,
+  WATER_NORMAL_MAP_WAVE_SCALE_MAX,
+  WATER_NORMAL_MAP_WAVE_SCALE_MIN,
+  WATER_STYLE_OPTIONS,
+  WATER_WAVE_SCALE_MAX,
+  WATER_WAVE_SCALE_MIN,
+} from '../../config/waterSettings'
 import { useAdmin } from '../../context/AdminProvider'
 import { useSandbox } from '../../context/SandboxProvider'
 import { useTerrainHeightmap } from '../../context/TerrainHeightmapProvider'
+import { useTerrainSculpt } from '../../context/TerrainSculptProvider'
 import { useAdminPanelLayout, type AdminPanelSectionId } from '../../hooks/useAdminPanelLayout'
 import type { PropDefinition } from '../../types/propLibrary'
-import type { CameraSettings, FogSettings, LatLng, PropRateLimit, SceneAppearance, TerrainSettings, WaterMeshQuality, WaterSettings } from '../../types/sandbox'
+import type { CameraSettings, FogSettings, LatLng, PropRateLimit, SceneAppearance, TerrainLayerNudges, TerrainSettings, WaterBaseNormalSettings, WaterEdgeRippleSettings, WaterMeshQuality, WaterNormalLayerSettings, WaterSettings } from '../../types/sandbox'
 import { getPropRateLimit } from '../../utils/rateLimitSettings'
 import { useAdminSceneAppearanceDraft } from '../../hooks/useAdminSceneAppearanceDraft'
 import { HeightmapMapPicker } from './HeightmapMapPicker'
+import { TerrainLayerNudgePanels } from './TerrainLayerNudgeControls'
 import { VisibilityToggle } from './VisibilityToggle'
 
 function AdminSection({
@@ -78,6 +111,8 @@ export function AdminPanel() {
   const [terrainMessage, setTerrainMessage] = useState<string | null>(null)
   const [isGeneratingTerrain, setIsGeneratingTerrain] = useState(false)
   const [isGeneratingSurface, setIsGeneratingSurface] = useState(false)
+  const [isGeneratingOsm, setIsGeneratingOsm] = useState(false)
+  const [isRefreshingSurround, setIsRefreshingSurround] = useState(false)
   const { scrollRef, toggleSection, isExpanded } = useAdminPanelLayout(isPanelOpen)
   const {
     isLoading: isHeightmapLoading,
@@ -88,7 +123,15 @@ export function AdminPanel() {
     surfaceProgress,
     surfaceError,
     generateSurfaceFromPolygon,
+    isOsmFeaturesLoading,
+    osmFeaturesProgress,
+    osmFeaturesError,
+    generateOsmFeaturesFromPolygon,
+    isSurroundLoading,
+    surroundError,
+    refreshSurroundTerrain,
   } = useTerrainHeightmap()
+  const { resetAllSculpting } = useTerrainSculpt()
 
   const committedSceneAppearance = useMemo(
     () => normalizeSceneAppearance(settings.sceneAppearance),
@@ -261,6 +304,40 @@ export function AdminPanel() {
     setMapOpMessage(`Deleted all ${result.deletedCount} props.`)
   }
 
+  const handleResetSculpting = async () => {
+    if (
+      !window.confirm(
+        'Reset all terrain sculpting to the original heightmap? This cannot be undone.',
+      )
+    ) {
+      return
+    }
+
+    setIsMapOpRunning(true)
+    setMapOpMessage(null)
+    const result = await resetAllSculpting(getAdminPassword())
+    if (!result.ok) {
+      setIsMapOpRunning(false)
+      setMapOpMessage(result.message)
+      return
+    }
+
+    applySceneAppearance(
+      normalizeSceneAppearance({
+        ...sceneAppearance,
+        terrain: { ...sceneAppearance.terrain, sculptVersion: 0 },
+      }),
+      { immediate: true },
+    )
+
+    setIsMapOpRunning(false)
+    const strokeNote =
+      isMultiplayer && result.deletedCount > 0
+        ? ` Cleared ${result.deletedCount} stored stroke(s).`
+        : ''
+    setMapOpMessage(`Terrain sculpting reset to the original heightmap.${strokeNote}`)
+  }
+
   const handleLockLayout = async () => {
     setIsMapOpRunning(true)
     setMapOpMessage(null)
@@ -286,9 +363,30 @@ export function AdminPanel() {
   }
 
   const updateWater = (patch: Partial<WaterSettings>) => {
-    applySceneAppearance({
-      ...sceneAppearance,
-      water: { ...sceneAppearance.water, ...patch },
+    applySceneAppearance(
+      {
+        ...sceneAppearance,
+        water: { ...sceneAppearance.water, ...patch },
+      },
+      { immediate: true },
+    )
+  }
+
+  const updateNormalLayer = (index: number, patch: Partial<WaterNormalLayerSettings>) => {
+    const layers = [...sceneAppearance.water.normalLayerSettings] as WaterSettings['normalLayerSettings']
+    layers[index] = { ...layers[index], ...patch }
+    updateWater({ normalLayerSettings: layers })
+  }
+
+  const updateBaseNormalMap = (patch: Partial<WaterBaseNormalSettings>) => {
+    updateWater({
+      baseNormalMap: { ...sceneAppearance.water.baseNormalMap, ...patch },
+    })
+  }
+
+  const updateEdgeRipples = (patch: Partial<WaterEdgeRippleSettings>) => {
+    updateWater({
+      edgeRipples: { ...sceneAppearance.water.edgeRipples, ...patch },
     })
   }
 
@@ -296,17 +394,25 @@ export function AdminPanel() {
     applySceneAppearance(
       {
         ...sceneAppearance,
-        water: DEFAULT_WATER_SETTINGS,
+        water: getDefaultWaterSettings(),
       },
       { immediate: true },
     )
   }
 
+  const saveWaterDefaults = () => {
+    saveWaterSettingsAsDefaults(sceneAppearance.water)
+    setSceneMessage('Saved current water settings as defaults for this browser.')
+  }
+
   const updateFog = (patch: Partial<FogSettings>) => {
-    applySceneAppearance({
-      ...sceneAppearance,
-      fog: { ...sceneAppearance.fog, ...patch },
-    })
+    applySceneAppearance(
+      {
+        ...sceneAppearance,
+        fog: { ...sceneAppearance.fog, ...patch },
+      },
+      { immediate: true },
+    )
   }
 
   const resetFog = () => {
@@ -360,6 +466,54 @@ export function AdminPanel() {
     })
   }
 
+  const updateLayerNudge = (
+    layer: keyof TerrainLayerNudges,
+    patch: Partial<TerrainLayerNudges[typeof layer]>,
+  ) => {
+    applySceneAppearance(
+      {
+        ...sceneAppearance,
+        terrain: {
+          ...sceneAppearance.terrain,
+          layerNudges: {
+            ...sceneAppearance.terrain.layerNudges,
+            [layer]: { ...sceneAppearance.terrain.layerNudges[layer], ...patch },
+          },
+        },
+      },
+      { immediate: true },
+    )
+  }
+
+  const resetLayerNudge = (layer: keyof TerrainLayerNudges) => {
+    applySceneAppearance(
+      {
+        ...sceneAppearance,
+        terrain: {
+          ...sceneAppearance.terrain,
+          layerNudges: {
+            ...sceneAppearance.terrain.layerNudges,
+            [layer]: { ...DEFAULT_TERRAIN_SETTINGS.layerNudges[layer] },
+          },
+        },
+      },
+      { immediate: true },
+    )
+  }
+
+  const resetLayerNudges = () => {
+    applySceneAppearance(
+      {
+        ...sceneAppearance,
+        terrain: {
+          ...sceneAppearance.terrain,
+          layerNudges: { ...DEFAULT_TERRAIN_SETTINGS.layerNudges },
+        },
+      },
+      { immediate: true },
+    )
+  }
+
   const handleFetchElevation = async () => {
     if (draftTerrainPolygon.length < 3) {
       setTerrainMessage('Draw at least 3 points on the map.')
@@ -381,6 +535,80 @@ export function AdminPanel() {
       return
     }
 
+    const committed = normalizeSceneAppearance(settings.sceneAppearance)
+    const hadSurface =
+      committed.terrain.surfaceVersion > 0 && committed.terrain.surfaceStyle !== 'grid'
+
+    applySceneAppearance(
+      {
+        ...committed,
+          terrain: {
+          ...nextTerrain,
+          surfaceVersion: 0,
+          sculptVersion: 0,
+          lastSurfaceZoom: null,
+        },
+      },
+      { immediate: true },
+    )
+    setTerrainDrawing(false)
+    setTerrainMessage(
+      hadSurface
+        ? `Applied real elevation (${nextTerrain.lastMinElevation?.toFixed(1)}–${nextTerrain.lastMaxElevation?.toFixed(1)} m). Re-fetch surface to realign the orthophoto.`
+        : `Applied real elevation (${nextTerrain.lastMinElevation?.toFixed(1)}–${nextTerrain.lastMaxElevation?.toFixed(1)} m, zoom ${nextTerrain.lastZoom}).`,
+    )
+  }
+
+  const handleRefreshSurround = async () => {
+    if (sceneAppearance.terrain.source !== 'dem') {
+      setTerrainMessage('Fetch elevation first to enable distant surround terrain.')
+      return
+    }
+
+    setIsRefreshingSurround(true)
+    setTerrainMessage(null)
+
+    const nextTerrain = await refreshSurroundTerrain()
+    setIsRefreshingSurround(false)
+
+    if (!nextTerrain) {
+      setTerrainMessage('Failed to refresh distant surround terrain.')
+      return
+    }
+
+    applySceneAppearance(
+      {
+        ...sceneAppearance,
+        terrain: nextTerrain,
+      },
+      { immediate: true },
+    )
+    setTerrainMessage('Refreshed distant surround terrain.')
+  }
+
+  const handleFetchOsmFeatures = async () => {
+    if (draftTerrainPolygon.length < 3) {
+      setTerrainMessage('Draw at least 3 points on the map.')
+      return
+    }
+
+    if (sceneAppearance.terrain.source !== 'dem' || sceneAppearance.terrain.version < 1) {
+      setTerrainMessage('Fetch elevation first so buildings and trees sit on real terrain.')
+      return
+    }
+
+    setIsGeneratingOsm(true)
+    setTerrainMessage(null)
+
+    const nextTerrain = await generateOsmFeaturesFromPolygon(draftTerrainPolygon)
+
+    setIsGeneratingOsm(false)
+
+    if (!nextTerrain) {
+      setTerrainMessage('Failed to fetch OSM buildings and trees.')
+      return
+    }
+
     applySceneAppearance(
       {
         ...sceneAppearance,
@@ -389,9 +617,7 @@ export function AdminPanel() {
       { immediate: true },
     )
     setTerrainDrawing(false)
-    setTerrainMessage(
-      `Applied real elevation (${nextTerrain.lastMinElevation?.toFixed(1)}–${nextTerrain.lastMaxElevation?.toFixed(1)} m, zoom ${nextTerrain.lastZoom}).`,
-    )
+    setTerrainMessage('Applied OSM buildings and trees from OpenStreetMap.')
   }
 
   const resetTerrainDraft = () => {
@@ -410,11 +636,16 @@ export function AdminPanel() {
       return
     }
 
+    if (sceneAppearance.terrain.source !== 'dem' || sceneAppearance.terrain.version < 1) {
+      setTerrainMessage('Fetch elevation first so the surface uses the same geo reference.')
+      return
+    }
+
     setIsGeneratingSurface(true)
     setTerrainMessage(null)
 
     const nextTerrain = await generateSurfaceFromPolygon(draftTerrainPolygon, {
-      sampleSize: sceneAppearance.terrain.sampleSize,
+      surfaceSampleSize: sceneAppearance.terrain.surfaceSampleSize,
       surfaceStyle: sceneAppearance.terrain.surfaceStyle,
     })
 
@@ -425,9 +656,10 @@ export function AdminPanel() {
       return
     }
 
+    const committed = normalizeSceneAppearance(settings.sceneAppearance)
     applySceneAppearance(
       {
-        ...sceneAppearance,
+        ...committed,
         terrain: nextTerrain,
       },
       { immediate: true },
@@ -600,6 +832,34 @@ export function AdminPanel() {
               max={100}
               value={Math.round(sceneAppearance.camera.fov)}
               onChange={(event) => updateCamera({ fov: Number(event.target.value) })}
+              disabled={isSavingScene}
+              className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+            />
+          </label>
+
+          <label className="block text-xs text-slate-400">
+            Clip near plane ({sceneAppearance.camera.near.toFixed(2)} units)
+            <input
+              type="range"
+              min={0.01}
+              max={10}
+              step={0.01}
+              value={sceneAppearance.camera.near}
+              onChange={(event) => updateCamera({ near: Number(event.target.value) })}
+              disabled={isSavingScene}
+              className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+            />
+          </label>
+
+          <label className="block text-xs text-slate-400">
+            Clip far plane ({Math.round(sceneAppearance.camera.far)} units)
+            <input
+              type="range"
+              min={100}
+              max={5000}
+              step={10}
+              value={Math.round(sceneAppearance.camera.far)}
+              onChange={(event) => updateCamera({ far: Number(event.target.value) })}
               disabled={isSavingScene}
               className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
             />
@@ -791,7 +1051,7 @@ export function AdminPanel() {
           </label>
 
           <label className="block text-sm text-slate-300">
-            Sample resolution
+            Heightmap sample resolution
             <select
               value={sceneAppearance.terrain.sampleSize}
               onChange={(event) =>
@@ -802,25 +1062,143 @@ export function AdminPanel() {
             >
               {TERRAIN_SAMPLE_SIZE_OPTIONS.map((size) => (
                 <option key={size} value={size}>
-                  {size}×{size}
+                  {size}×{size} elevation
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block text-sm text-slate-300">
+            Terrain mesh quality
+            <select
+              value={sceneAppearance.terrain.meshQuality}
+              onChange={(event) =>
+                updateTerrain({ meshQuality: event.target.value as TerrainSettings['meshQuality'] })
+              }
+              disabled={isSavingScene || isGeneratingTerrain}
+              className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white disabled:opacity-40"
+            >
+              {TERRAIN_MESH_QUALITY_OPTIONS.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
                 </option>
               ))}
             </select>
           </label>
 
           <label className="block text-xs text-slate-400">
-            Max terrain height ({sceneAppearance.terrain.maxHeight.toFixed(1)} units)
+            Height exaggeration ({sceneAppearance.terrain.maxHeight.toFixed(2)}×, 1 = real-world scale)
             <input
               type="range"
-              min={1}
-              max={30}
-              step={0.5}
+              min={0.25}
+              max={5}
+              step={0.05}
               value={sceneAppearance.terrain.maxHeight}
               onChange={(event) => updateTerrain({ maxHeight: Number(event.target.value) })}
               disabled={isSavingScene || isGeneratingTerrain}
               className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
             />
           </label>
+
+          <hr className="border-slate-800" />
+
+          <p className="text-xs text-slate-400">
+            Distant surround: a low-detail terrain ring outside the island outline for far-context views.
+            Generated automatically when elevation is fetched.
+          </p>
+
+          <label className="flex items-center gap-2 text-sm text-slate-300">
+            <input
+              type="checkbox"
+              checked={sceneAppearance.terrain.surroundEnabled}
+              onChange={(event) =>
+                updateTerrain({
+                  surroundEnabled: event.target.checked,
+                  surroundVersion: sceneAppearance.terrain.surroundVersion + 1,
+                })
+              }
+              disabled={isSavingScene || isGeneratingTerrain || isRefreshingSurround}
+              className="rounded border-slate-600"
+            />
+            Show distant surround terrain
+          </label>
+
+          <label className="block text-xs text-slate-400">
+            Surround extent ({sceneAppearance.terrain.surroundScale.toFixed(1)}× main terrain size)
+            <input
+              type="range"
+              min={1.6}
+              max={4}
+              step={0.1}
+              value={sceneAppearance.terrain.surroundScale}
+              onChange={(event) =>
+                updateTerrain({
+                  surroundScale: Number(event.target.value),
+                  surroundVersion: sceneAppearance.terrain.surroundVersion + 1,
+                })
+              }
+              disabled={
+                isSavingScene ||
+                isGeneratingTerrain ||
+                isRefreshingSurround ||
+                !sceneAppearance.terrain.surroundEnabled
+              }
+              className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+            />
+          </label>
+
+          <label className="block text-xs text-slate-400">
+            Surround opacity ({Math.round(sceneAppearance.terrain.surroundOpacity * 100)}%)
+            <input
+              type="range"
+              min={0.2}
+              max={1}
+              step={0.02}
+              value={sceneAppearance.terrain.surroundOpacity}
+              onChange={(event) => updateTerrain({ surroundOpacity: Number(event.target.value) })}
+              disabled={isSavingScene || !sceneAppearance.terrain.surroundEnabled}
+              className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+            />
+          </label>
+
+          <label className="block text-sm text-slate-300">
+            Surround mesh detail
+            <select
+              value={sceneAppearance.terrain.surroundDetail}
+              onChange={(event) =>
+                updateTerrain({
+                  surroundDetail: event.target.value as TerrainSettings['surroundDetail'],
+                })
+              }
+              disabled={isSavingScene || !sceneAppearance.terrain.surroundEnabled}
+              className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white disabled:opacity-40"
+            >
+              <option value="low">Low (48 segments)</option>
+              <option value="medium">Medium (72 segments)</option>
+            </select>
+          </label>
+
+          {(isSurroundLoading || isRefreshingSurround) && (
+            <p className="text-xs text-cyan-300">Loading distant surround terrain…</p>
+          )}
+
+          {surroundError && <p className="text-xs text-red-300">{surroundError}</p>}
+
+          <button
+            type="button"
+            onClick={() => void handleRefreshSurround()}
+            disabled={
+              isSavingScene ||
+              isGeneratingTerrain ||
+              isRefreshingSurround ||
+              isSurroundLoading ||
+              !sceneAppearance.terrain.surroundEnabled ||
+              sceneAppearance.terrain.source !== 'dem'
+            }
+            className="rounded-lg border border-slate-600 px-3 py-2 text-sm text-slate-200 disabled:opacity-40"
+          >
+            {isRefreshingSurround ? 'Refreshing surround…' : 'Refresh distant surround'}
+          </button>
 
           {sceneAppearance.terrain.lastMinElevation !== null && sceneAppearance.terrain.lastMaxElevation !== null && (
             <p className="text-xs text-slate-400">
@@ -877,6 +1255,26 @@ export function AdminPanel() {
               {TERRAIN_SURFACE_STYLE_OPTIONS.map((option) => (
                 <option key={option.id} value={option.id}>
                   {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block text-sm text-slate-300">
+            Surface texture resolution
+            <select
+              value={sceneAppearance.terrain.surfaceSampleSize}
+              onChange={(event) =>
+                updateTerrain({
+                  surfaceSampleSize: Number(event.target.value) as TerrainSettings['surfaceSampleSize'],
+                })
+              }
+              disabled={isSavingScene || isGeneratingSurface}
+              className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white disabled:opacity-40"
+            >
+              {TERRAIN_SURFACE_SAMPLE_SIZE_OPTIONS.map((size) => (
+                <option key={size} value={size}>
+                  {size}×{size} texture
                 </option>
               ))}
             </select>
@@ -944,11 +1342,82 @@ export function AdminPanel() {
               isGeneratingSurface ||
               isSurfaceLoading ||
               draftTerrainPolygon.length < 3 ||
-              sceneAppearance.terrain.surfaceStyle === 'grid'
+              sceneAppearance.terrain.surfaceStyle === 'grid' ||
+              sceneAppearance.terrain.source !== 'dem' ||
+              sceneAppearance.terrain.version < 1
             }
             className="rounded-lg bg-cyan-600 px-3 py-2 text-sm text-white disabled:opacity-40"
           >
             {isGeneratingSurface ? 'Applying surface…' : 'Fetch & apply surface'}
+          </button>
+
+          <hr className="border-slate-800" />
+
+          <p className="text-xs text-slate-400">
+            3D map features from OpenStreetMap: extruded building footprints and instanced trees. Fetched once,
+            cached locally, rendered with GPU instancing for performance.
+          </p>
+
+          <label className="flex items-center gap-2 text-sm text-slate-300">
+            <input
+              type="checkbox"
+              checked={sceneAppearance.terrain.osmFeaturesEnabled}
+              onChange={(event) => updateTerrain({ osmFeaturesEnabled: event.target.checked })}
+              disabled={isSavingScene || isGeneratingOsm}
+            />
+            Show OSM buildings & trees
+          </label>
+
+          {sceneAppearance.terrain.osmFeaturesVersion > 0 && (
+            <p className="text-xs text-slate-400">OSM features v{sceneAppearance.terrain.osmFeaturesVersion}</p>
+          )}
+
+          {(isGeneratingOsm || isOsmFeaturesLoading) && (
+            <p className="text-xs text-cyan-300">
+              {osmFeaturesProgress !== null
+                ? `Loading OSM features (${Math.round(osmFeaturesProgress * 100)}%)…`
+                : 'Processing OSM features…'}
+            </p>
+          )}
+
+          {osmFeaturesError && <p className="text-xs text-red-300">{osmFeaturesError}</p>}
+
+          <button
+            type="button"
+            onClick={() => void handleFetchOsmFeatures()}
+            disabled={
+              isSavingScene ||
+              isGeneratingOsm ||
+              isOsmFeaturesLoading ||
+              draftTerrainPolygon.length < 3 ||
+              sceneAppearance.terrain.source === 'procedural'
+            }
+            className="rounded-lg bg-cyan-600 px-3 py-2 text-sm text-white disabled:opacity-40"
+          >
+            {isGeneratingOsm ? 'Fetching OSM features…' : 'Fetch OSM buildings & trees'}
+          </button>
+
+          <hr className="border-slate-800" />
+
+          <p className="text-xs text-slate-400">
+            Temporary layer alignment: offset and scale heightmap, orthophoto, and OSM layers. X = east–west,
+            Y = north–south. Scale 1 = 100%.
+          </p>
+
+          <TerrainLayerNudgePanels
+            layerNudges={sceneAppearance.terrain.layerNudges}
+            disabled={isSavingScene}
+            onUpdate={updateLayerNudge}
+            onReset={resetLayerNudge}
+          />
+
+          <button
+            type="button"
+            onClick={resetLayerNudges}
+            disabled={isSavingScene}
+            className="rounded-lg border border-slate-600 px-3 py-2 text-sm text-slate-200 disabled:opacity-40"
+          >
+            Reset all layer nudges
           </button>
 
           <button
@@ -963,7 +1432,7 @@ export function AdminPanel() {
                 { immediate: true },
               )
             }}
-            disabled={isSavingScene || isGeneratingTerrain || isGeneratingSurface}
+            disabled={isSavingScene || isGeneratingTerrain || isGeneratingSurface || isGeneratingOsm}
             className="rounded-lg bg-slate-800 px-3 py-2 text-sm text-white disabled:opacity-40"
           >
             Reset terrain defaults
@@ -1014,8 +1483,9 @@ export function AdminPanel() {
             Near distance — fade starts ({Math.round(sceneAppearance.fog.near)} units)
             <input
               type="range"
-              min={10}
-              max={300}
+              min={FOG_NEAR_MIN}
+              max={FOG_NEAR_MAX}
+              step={1}
               value={Math.round(sceneAppearance.fog.near)}
               onChange={(event) => updateFog({ near: Number(event.target.value) })}
               disabled={isSavingScene || !sceneAppearance.fog.enabled}
@@ -1027,9 +1497,10 @@ export function AdminPanel() {
             Far distance — fully faded ({Math.round(sceneAppearance.fog.far)} units)
             <input
               type="range"
-              min={50}
-              max={500}
-              value={Math.round(sceneAppearance.fog.far)}
+              min={FOG_FAR_MIN}
+              max={FOG_FAR_MAX}
+              step={10}
+              value={Math.min(FOG_FAR_MAX, Math.max(FOG_FAR_MIN, Math.round(sceneAppearance.fog.far)))}
               onChange={(event) => updateFog({ far: Number(event.target.value) })}
               disabled={isSavingScene || !sceneAppearance.fog.enabled}
               className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
@@ -1098,20 +1569,98 @@ export function AdminPanel() {
           </label>
 
           <label className="block text-xs text-slate-400">
-            Wave scale ({sceneAppearance.water.waveScale.toFixed(2)}× — higher = smaller ripples)
+            Wave scale ({sceneAppearance.water.waveScale.toFixed(3)}× — higher = smaller ripples, world-space)
             <input
               type="range"
-              min={10}
-              max={800}
-              value={Math.round(sceneAppearance.water.waveScale * 100)}
-              onChange={(event) => updateWater({ waveScale: Number(event.target.value) / 100 })}
+              min={Math.round(WATER_WAVE_SCALE_MIN * 1000)}
+              max={Math.round(WATER_WAVE_SCALE_MAX * 1000)}
+              step={1}
+              value={Math.round(sceneAppearance.water.waveScale * 1000)}
+              onChange={(event) => updateWater({ waveScale: Number(event.target.value) / 1000 })}
               disabled={isSavingScene || !sceneAppearance.water.enabled}
               className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+            />
+            <input
+              type="number"
+              min={WATER_WAVE_SCALE_MIN}
+              max={WATER_WAVE_SCALE_MAX}
+              step={0.001}
+              value={sceneAppearance.water.waveScale}
+              onChange={(event) => updateWater({ waveScale: Number(event.target.value) })}
+              disabled={isSavingScene || !sceneAppearance.water.enabled}
+              className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-white disabled:opacity-40"
+            />
+          </label>
+
+          <div className="grid grid-cols-2 gap-3">
+            <label className="text-xs text-slate-400">
+              Displacement distortion scale ({sceneAppearance.water.displacementDistortion.toFixed(3)})
+              <input
+                type="range"
+                min={0}
+                max={Math.round(WATER_DISTORTION_MAX * WATER_DISTORTION_SLIDER_SCALE)}
+                step={1}
+                value={Math.round(sceneAppearance.water.displacementDistortion * WATER_DISTORTION_SLIDER_SCALE)}
+                onChange={(event) =>
+                  updateWater({
+                    displacementDistortion: Number(event.target.value) / WATER_DISTORTION_SLIDER_SCALE,
+                  })
+                }
+                disabled={isSavingScene || !sceneAppearance.water.enabled}
+                className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+              />
+            </label>
+            <label className="text-xs text-slate-400">
+              Distortion speed ({sceneAppearance.water.displacementDistortionSpeed.toFixed(3)}×)
+              <input
+                type="range"
+                min={0}
+                max={Math.round(WATER_DISTORTION_SPEED_MAX * WATER_DISTORTION_SLIDER_SCALE)}
+                step={1}
+                value={Math.round(
+                  sceneAppearance.water.displacementDistortionSpeed * WATER_DISTORTION_SLIDER_SCALE,
+                )}
+                onChange={(event) =>
+                  updateWater({
+                    displacementDistortionSpeed: Number(event.target.value) / WATER_DISTORTION_SLIDER_SCALE,
+                  })
+                }
+                disabled={isSavingScene || !sceneAppearance.water.enabled}
+                className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+              />
+            </label>
+          </div>
+
+          <label className="block text-xs text-slate-400">
+            Detail wave scale ({sceneAppearance.water.detailScale.toFixed(2)}×)
+            <input
+              type="range"
+              min={Math.round(WATER_DETAIL_SCALE_MIN * 100)}
+              max={Math.round(WATER_DETAIL_SCALE_MAX * 100)}
+              step={1}
+              value={Math.round(sceneAppearance.water.detailScale * 100)}
+              onChange={(event) => updateWater({ detailScale: Number(event.target.value) / 100 })}
+              disabled={
+                isSavingScene || !sceneAppearance.water.enabled || sceneAppearance.water.detailLayers === 0
+              }
+              className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+            />
+            <input
+              type="number"
+              min={WATER_DETAIL_SCALE_MIN}
+              max={WATER_DETAIL_SCALE_MAX}
+              step={0.05}
+              value={sceneAppearance.water.detailScale}
+              onChange={(event) => updateWater({ detailScale: Number(event.target.value) })}
+              disabled={
+                isSavingScene || !sceneAppearance.water.enabled || sceneAppearance.water.detailLayers === 0
+              }
+              className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-white disabled:opacity-40"
             />
           </label>
 
           <label className="block text-xs text-slate-400">
-            Edge fade ({Math.round(sceneAppearance.water.edgeFade * 100)}%)
+            Radial edge fade ({Math.round(sceneAppearance.water.edgeFade * 100)}% — outer sea plane)
             <input
               type="range"
               min={0}
@@ -1123,22 +1672,55 @@ export function AdminPanel() {
             />
           </label>
 
+          <label className="block text-xs text-slate-400">
+            Shoreline fade ({Math.round(sceneAppearance.water.shorelineFadeDistance)} m — distance from coast)
+            <input
+              type="range"
+              min={0}
+              max={WATER_SHORELINE_FADE_DISTANCE_MAX}
+              step={1}
+              value={Math.round(sceneAppearance.water.shorelineFadeDistance)}
+              onChange={(event) =>
+                updateWater({ shorelineFadeDistance: Number(event.target.value) })
+              }
+              disabled={isSavingScene || !sceneAppearance.water.enabled}
+              className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+            />
+          </label>
+
+          <label className="block text-xs text-slate-400">
+            Fade strength ({Math.round(sceneAppearance.water.shorelineFadeStrength * 100)}% — 0% off, 100% fully transparent at shore)
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={1}
+              value={Math.round(sceneAppearance.water.shorelineFadeStrength * 100)}
+              onChange={(event) =>
+                updateWater({ shorelineFadeStrength: Number(event.target.value) / 100 })
+              }
+              disabled={isSavingScene || !sceneAppearance.water.enabled}
+              className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+            />
+          </label>
+
+          <label className="block text-xs text-slate-400">
+            Sea level (Y)
+            <input
+              type="number"
+              min={-2}
+              max={8}
+              step={0.05}
+              value={sceneAppearance.water.level}
+              onChange={(event) => updateWater({ level: Number(event.target.value) })}
+              disabled={isSavingScene || !sceneAppearance.water.enabled}
+              className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-white disabled:opacity-40"
+            />
+          </label>
+
           <div className="grid grid-cols-2 gap-3">
             <label className="text-xs text-slate-400">
-              Sea level (Y)
-              <input
-                type="number"
-                min={-2}
-                max={8}
-                step={0.05}
-                value={sceneAppearance.water.level}
-                onChange={(event) => updateWater({ level: Number(event.target.value) })}
-                disabled={isSavingScene || !sceneAppearance.water.enabled}
-                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-white disabled:opacity-40"
-              />
-            </label>
-            <label className="text-xs text-slate-400">
-              Water color
+              Base colour
               <input
                 type="color"
                 value={sceneAppearance.water.color}
@@ -1147,7 +1729,44 @@ export function AdminPanel() {
                 className="mt-1 h-9 w-full cursor-pointer rounded border border-slate-700 bg-slate-950 disabled:opacity-40"
               />
             </label>
+            <label className="text-xs text-slate-400">
+              Normal highlight colour
+              <input
+                type="color"
+                value={sceneAppearance.water.normalHighlightColor}
+                onChange={(event) => updateWater({ normalHighlightColor: event.target.value })}
+                disabled={isSavingScene || !sceneAppearance.water.enabled}
+                className="mt-1 h-9 w-full cursor-pointer rounded border border-slate-700 bg-slate-950 disabled:opacity-40"
+              />
+              <span className="mt-0.5 block text-[10px] text-slate-500">Lit side of wave normals</span>
+            </label>
           </div>
+
+          <label className="text-xs text-slate-400">
+            Normal shadow colour
+            <input
+              type="color"
+              value={sceneAppearance.water.normalShadowColor}
+              onChange={(event) => updateWater({ normalShadowColor: event.target.value })}
+              disabled={isSavingScene || !sceneAppearance.water.enabled}
+              className="mt-1 h-9 w-full cursor-pointer rounded border border-slate-700 bg-slate-950 disabled:opacity-40"
+            />
+            <span className="mt-0.5 block text-[10px] text-slate-500">Dark side of wave normals</span>
+          </label>
+
+          <label className="block text-xs text-slate-400">
+            Normal colour scale ({sceneAppearance.water.normalColorScale.toFixed(2)} — highlight and shadow tint intensity)
+            <input
+              type="range"
+              min={0}
+              max={Math.round(WATER_NORMAL_COLOR_SCALE_MAX * 100)}
+              step={5}
+              value={Math.round(sceneAppearance.water.normalColorScale * 100)}
+              onChange={(event) => updateWater({ normalColorScale: Number(event.target.value) / 100 })}
+              disabled={isSavingScene || !sceneAppearance.water.enabled}
+              className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+            />
+          </label>
 
           <label className="block text-sm text-slate-300">
             Mesh quality
@@ -1165,19 +1784,6 @@ export function AdminPanel() {
                 </option>
               ))}
             </select>
-          </label>
-
-          <label className="block text-xs text-slate-400">
-            Wave randomness ({Math.round(sceneAppearance.water.waveRandomness * 100)}%)
-            <input
-              type="range"
-              min={0}
-              max={100}
-              value={Math.round(sceneAppearance.water.waveRandomness * 100)}
-              onChange={(event) => updateWater({ waveRandomness: Number(event.target.value) / 100 })}
-              disabled={isSavingScene || !sceneAppearance.water.enabled}
-              className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
-            />
           </label>
 
           <label className="block text-xs text-slate-400">
@@ -1212,21 +1818,6 @@ export function AdminPanel() {
           </label>
 
           <label className="block text-xs text-slate-400">
-            Detail scale ({sceneAppearance.water.detailScale.toFixed(1)}×)
-            <input
-              type="range"
-              min={10}
-              max={100}
-              value={Math.round(sceneAppearance.water.detailScale * 10)}
-              onChange={(event) => updateWater({ detailScale: Number(event.target.value) / 10 })}
-              disabled={
-                isSavingScene || !sceneAppearance.water.enabled || sceneAppearance.water.detailLayers === 0
-              }
-              className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
-            />
-          </label>
-
-          <label className="block text-xs text-slate-400">
             Detail strength ({Math.round(sceneAppearance.water.detailStrength * 100)}%)
             <input
               type="range"
@@ -1240,6 +1831,45 @@ export function AdminPanel() {
               className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
             />
           </label>
+
+          <div className="grid grid-cols-2 gap-3">
+            <label className="text-xs text-slate-400">
+              Detail distortion scale ({sceneAppearance.water.detailDistortion.toFixed(3)})
+              <input
+                type="range"
+                min={0}
+                max={Math.round(WATER_DISTORTION_MAX * WATER_DISTORTION_SLIDER_SCALE)}
+                step={1}
+                value={Math.round(sceneAppearance.water.detailDistortion * WATER_DISTORTION_SLIDER_SCALE)}
+                onChange={(event) =>
+                  updateWater({ detailDistortion: Number(event.target.value) / WATER_DISTORTION_SLIDER_SCALE })
+                }
+                disabled={
+                  isSavingScene || !sceneAppearance.water.enabled || sceneAppearance.water.detailLayers === 0
+                }
+                className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+              />
+            </label>
+            <label className="text-xs text-slate-400">
+              Distortion speed ({sceneAppearance.water.detailDistortionSpeed.toFixed(3)}×)
+              <input
+                type="range"
+                min={0}
+                max={Math.round(WATER_DISTORTION_SPEED_MAX * WATER_DISTORTION_SLIDER_SCALE)}
+                step={1}
+                value={Math.round(sceneAppearance.water.detailDistortionSpeed * WATER_DISTORTION_SLIDER_SCALE)}
+                onChange={(event) =>
+                  updateWater({
+                    detailDistortionSpeed: Number(event.target.value) / WATER_DISTORTION_SLIDER_SCALE,
+                  })
+                }
+                disabled={
+                  isSavingScene || !sceneAppearance.water.enabled || sceneAppearance.water.detailLayers === 0
+                }
+                className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+              />
+            </label>
+          </div>
 
           <label className="block text-xs text-slate-400">
             Wave height ({sceneAppearance.water.waveHeight.toFixed(2)})
@@ -1320,14 +1950,532 @@ export function AdminPanel() {
             </label>
           </div>
 
-          <button
-            type="button"
-            onClick={resetWater}
-            disabled={isSavingScene}
-            className="rounded-lg bg-slate-800 px-3 py-2 text-sm text-white disabled:opacity-40"
-          >
-            Reset water defaults
-          </button>
+          <p className="text-xs text-slate-400">
+            Displacement comes from the mesh. Base and detail normal layers adjust lighting only (not geometry).
+          </p>
+
+          <div className="space-y-2 rounded-lg border border-slate-800 bg-slate-950/60 p-3">
+            <p className="text-xs font-medium text-slate-300">Base normal map</p>
+
+            <label className="block text-xs text-slate-400">
+              Shape
+              <select
+                value={sceneAppearance.water.baseNormalMap.shape}
+                onChange={(event) =>
+                  updateBaseNormalMap({ shape: event.target.value as WaterSettings['style'] })
+                }
+                disabled={isSavingScene || !sceneAppearance.water.enabled}
+                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white disabled:opacity-40"
+              >
+                {WATER_STYLE_OPTIONS.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="block text-xs text-slate-400">
+              Ripple scale ({sceneAppearance.water.baseNormalMap.waveScale.toFixed(2)}× — higher = finer ripples)
+              <input
+                type="range"
+                min={Math.round(WATER_NORMAL_MAP_WAVE_SCALE_MIN * 1000)}
+                max={Math.round(WATER_NORMAL_MAP_WAVE_SCALE_MAX * 1000)}
+                step={1}
+                value={Math.round(sceneAppearance.water.baseNormalMap.waveScale * 1000)}
+                onChange={(event) =>
+                  updateBaseNormalMap({ waveScale: Number(event.target.value) / 1000 })
+                }
+                disabled={isSavingScene || !sceneAppearance.water.enabled}
+                className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+              />
+            </label>
+
+            <div className="grid grid-cols-2 gap-3">
+              <label className="text-xs text-slate-400">
+                Stretch X ({sceneAppearance.water.baseNormalMap.stretchX.toFixed(2)}×)
+                <input
+                  type="range"
+                  min={Math.round(WATER_NORMAL_LAYER_STRETCH_MIN * 100)}
+                  max={Math.round(WATER_NORMAL_LAYER_STRETCH_MAX * 100)}
+                  step={5}
+                  value={Math.round(sceneAppearance.water.baseNormalMap.stretchX * 100)}
+                  onChange={(event) =>
+                    updateBaseNormalMap({ stretchX: Number(event.target.value) / 100 })
+                  }
+                  disabled={isSavingScene || !sceneAppearance.water.enabled}
+                  className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+                />
+              </label>
+              <label className="text-xs text-slate-400">
+                Stretch Z ({sceneAppearance.water.baseNormalMap.stretchZ.toFixed(2)}×)
+                <input
+                  type="range"
+                  min={Math.round(WATER_NORMAL_LAYER_STRETCH_MIN * 100)}
+                  max={Math.round(WATER_NORMAL_LAYER_STRETCH_MAX * 100)}
+                  step={5}
+                  value={Math.round(sceneAppearance.water.baseNormalMap.stretchZ * 100)}
+                  onChange={(event) =>
+                    updateBaseNormalMap({ stretchZ: Number(event.target.value) / 100 })
+                  }
+                  disabled={isSavingScene || !sceneAppearance.water.enabled}
+                  className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+                />
+              </label>
+            </div>
+
+            <label className="block text-xs text-slate-400">
+              Layer strength ({Math.round(sceneAppearance.water.baseNormalMap.strength * 100)}%)
+              <input
+                type="range"
+                min={0}
+                max={Math.round(WATER_NORMAL_LAYER_STRENGTH_MAX * 100)}
+                step={1}
+                value={Math.round(sceneAppearance.water.baseNormalMap.strength * 100)}
+                onChange={(event) =>
+                  updateBaseNormalMap({ strength: Number(event.target.value) / 100 })
+                }
+                disabled={isSavingScene || !sceneAppearance.water.enabled}
+                className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+              />
+            </label>
+
+            <label className="block text-xs text-slate-400">
+              Animation ({sceneAppearance.water.baseNormalMap.speed.toFixed(2)}× — 0 = frozen)
+              <input
+                type="range"
+                min={0}
+                max={Math.round(WATER_NORMAL_MAP_SPEED_MAX * 100)}
+                step={5}
+                value={Math.round(sceneAppearance.water.baseNormalMap.speed * 100)}
+                onChange={(event) =>
+                  updateBaseNormalMap({ speed: Number(event.target.value) / 100 })
+                }
+                disabled={isSavingScene || !sceneAppearance.water.enabled}
+                className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+              />
+            </label>
+
+            <div className="grid grid-cols-2 gap-3">
+              <label className="text-xs text-slate-400">
+                Distortion scale ({sceneAppearance.water.baseNormalMap.distortion.toFixed(3)})
+                <input
+                  type="range"
+                  min={0}
+                  max={Math.round(WATER_DISTORTION_MAX * WATER_DISTORTION_SLIDER_SCALE)}
+                  step={1}
+                  value={Math.round(
+                    sceneAppearance.water.baseNormalMap.distortion * WATER_DISTORTION_SLIDER_SCALE,
+                  )}
+                  onChange={(event) =>
+                    updateBaseNormalMap({ distortion: Number(event.target.value) / WATER_DISTORTION_SLIDER_SCALE })
+                  }
+                  disabled={isSavingScene || !sceneAppearance.water.enabled}
+                  className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+                />
+              </label>
+              <label className="text-xs text-slate-400">
+                Distortion speed ({sceneAppearance.water.baseNormalMap.distortionSpeed.toFixed(3)}×)
+                <input
+                  type="range"
+                  min={0}
+                  max={Math.round(WATER_DISTORTION_SPEED_MAX * WATER_DISTORTION_SLIDER_SCALE)}
+                  step={1}
+                  value={Math.round(
+                    sceneAppearance.water.baseNormalMap.distortionSpeed * WATER_DISTORTION_SLIDER_SCALE,
+                  )}
+                  onChange={(event) =>
+                    updateBaseNormalMap({
+                      distortionSpeed: Number(event.target.value) / WATER_DISTORTION_SLIDER_SCALE,
+                    })
+                  }
+                  disabled={isSavingScene || !sceneAppearance.water.enabled}
+                  className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+                />
+              </label>
+            </div>
+          </div>
+
+          <label className="block text-xs text-slate-400">
+            Wave surface normals ({Math.round(sceneAppearance.water.normalMapStrength * 100)}% — 0% flat mirror, 100% full wave lighting)
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={1}
+              value={Math.round(sceneAppearance.water.normalMapStrength * 100)}
+              onChange={(event) => updateWater({ normalMapStrength: Number(event.target.value) / 100 })}
+              disabled={isSavingScene || !sceneAppearance.water.enabled}
+              className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+            />
+          </label>
+
+          <label className="block text-xs text-slate-400">
+            Normal layers
+            <select
+              value={sceneAppearance.water.normalLayers}
+              onChange={(event) =>
+                updateWater({ normalLayers: Number(event.target.value) as WaterSettings['normalLayers'] })
+              }
+              disabled={isSavingScene || !sceneAppearance.water.enabled}
+              className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white disabled:opacity-40"
+            >
+              {WATER_NORMAL_LAYER_OPTIONS.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          {sceneAppearance.water.normalLayers > 0 &&
+            sceneAppearance.water.normalLayerSettings
+              .slice(0, sceneAppearance.water.normalLayers)
+              .map((layer, index) => (
+                <div
+                  key={index}
+                  className="space-y-2 rounded-lg border border-slate-800 bg-slate-950/60 p-3"
+                >
+                  <p className="text-xs font-medium text-slate-300">Normal layer {index + 1}</p>
+
+                  <label className="block text-xs text-slate-400">
+                    Ripple scale ({layer.waveScale.toFixed(2)}× — higher = finer ripples)
+                    <input
+                      type="range"
+                      min={Math.round(WATER_NORMAL_MAP_WAVE_SCALE_MIN * 1000)}
+                      max={Math.round(WATER_NORMAL_MAP_WAVE_SCALE_MAX * 1000)}
+                      step={1}
+                      value={Math.round(layer.waveScale * 1000)}
+                      onChange={(event) =>
+                        updateNormalLayer(index, { waveScale: Number(event.target.value) / 1000 })
+                      }
+                      disabled={isSavingScene || !sceneAppearance.water.enabled}
+                      className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+                    />
+                  </label>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <label className="text-xs text-slate-400">
+                      Stretch X ({layer.stretchX.toFixed(2)}×)
+                      <input
+                        type="range"
+                        min={Math.round(WATER_NORMAL_LAYER_STRETCH_MIN * 100)}
+                        max={Math.round(WATER_NORMAL_LAYER_STRETCH_MAX * 100)}
+                        step={5}
+                        value={Math.round(layer.stretchX * 100)}
+                        onChange={(event) =>
+                          updateNormalLayer(index, { stretchX: Number(event.target.value) / 100 })
+                        }
+                        disabled={isSavingScene || !sceneAppearance.water.enabled}
+                        className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+                      />
+                    </label>
+                    <label className="text-xs text-slate-400">
+                      Stretch Z ({layer.stretchZ.toFixed(2)}×)
+                      <input
+                        type="range"
+                        min={Math.round(WATER_NORMAL_LAYER_STRETCH_MIN * 100)}
+                        max={Math.round(WATER_NORMAL_LAYER_STRETCH_MAX * 100)}
+                        step={5}
+                        value={Math.round(layer.stretchZ * 100)}
+                        onChange={(event) =>
+                          updateNormalLayer(index, { stretchZ: Number(event.target.value) / 100 })
+                        }
+                        disabled={isSavingScene || !sceneAppearance.water.enabled}
+                        className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+                      />
+                    </label>
+                  </div>
+
+                  <label className="block text-xs text-slate-400">
+                    Layer strength ({Math.round(layer.strength * 100)}%)
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      step={1}
+                      value={Math.round(layer.strength * 100)}
+                      onChange={(event) =>
+                        updateNormalLayer(index, { strength: Number(event.target.value) / 100 })
+                      }
+                      disabled={isSavingScene || !sceneAppearance.water.enabled}
+                      className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+                    />
+                  </label>
+
+                  <label className="block text-xs text-slate-400">
+                    Animation ({layer.speed.toFixed(2)}× — 0 = frozen for this layer)
+                    <input
+                      type="range"
+                      min={0}
+                      max={Math.round(WATER_NORMAL_MAP_SPEED_MAX * 100)}
+                      step={5}
+                      value={Math.round(layer.speed * 100)}
+                      onChange={(event) =>
+                        updateNormalLayer(index, { speed: Number(event.target.value) / 100 })
+                      }
+                      disabled={isSavingScene || !sceneAppearance.water.enabled}
+                      className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+                    />
+                  </label>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <label className="text-xs text-slate-400">
+                      Distortion scale ({layer.distortion.toFixed(3)})
+                      <input
+                        type="range"
+                        min={0}
+                        max={Math.round(WATER_DISTORTION_MAX * WATER_DISTORTION_SLIDER_SCALE)}
+                        step={1}
+                        value={Math.round(layer.distortion * WATER_DISTORTION_SLIDER_SCALE)}
+                        onChange={(event) =>
+                          updateNormalLayer(index, {
+                            distortion: Number(event.target.value) / WATER_DISTORTION_SLIDER_SCALE,
+                          })
+                        }
+                        disabled={isSavingScene || !sceneAppearance.water.enabled}
+                        className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+                      />
+                    </label>
+                    <label className="text-xs text-slate-400">
+                      Distortion speed ({layer.distortionSpeed.toFixed(3)}×)
+                      <input
+                        type="range"
+                        min={0}
+                        max={Math.round(WATER_DISTORTION_SPEED_MAX * WATER_DISTORTION_SLIDER_SCALE)}
+                        step={1}
+                        value={Math.round(layer.distortionSpeed * WATER_DISTORTION_SLIDER_SCALE)}
+                        onChange={(event) =>
+                          updateNormalLayer(index, {
+                            distortionSpeed: Number(event.target.value) / WATER_DISTORTION_SLIDER_SCALE,
+                          })
+                        }
+                        disabled={isSavingScene || !sceneAppearance.water.enabled}
+                        className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+                      />
+                    </label>
+                  </div>
+                </div>
+              ))}
+
+          <label className="block text-xs text-slate-400">
+            Normal sample size ({sceneAppearance.water.normalMapScale.toFixed(2)} m — higher = softer displacement normals)
+            <input
+              type="range"
+              min={Math.round(WATER_NORMAL_MAP_SCALE_MIN * 100)}
+              max={Math.round(WATER_NORMAL_MAP_SCALE_MAX * 100)}
+              step={5}
+              value={Math.round(sceneAppearance.water.normalMapScale * 100)}
+              onChange={(event) => updateWater({ normalMapScale: Number(event.target.value) / 100 })}
+              disabled={isSavingScene || !sceneAppearance.water.enabled}
+              className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+            />
+            <input
+              type="number"
+              min={WATER_NORMAL_MAP_SCALE_MIN}
+              max={WATER_NORMAL_MAP_SCALE_MAX}
+              step={0.05}
+              value={sceneAppearance.water.normalMapScale}
+              onChange={(event) => updateWater({ normalMapScale: Number(event.target.value) })}
+              disabled={isSavingScene || !sceneAppearance.water.enabled}
+              className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-white disabled:opacity-40"
+            />
+          </label>
+
+          <div className="space-y-2 rounded-lg border border-slate-800 bg-slate-950/60 p-3">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-xs font-medium text-slate-300">Terrain edge ripples</p>
+              <label className="flex items-center gap-2 text-xs text-slate-400">
+                <input
+                  type="checkbox"
+                  checked={sceneAppearance.water.edgeRipples.enabled}
+                  onChange={(event) => updateEdgeRipples({ enabled: event.target.checked })}
+                  disabled={isSavingScene || !sceneAppearance.water.enabled}
+                  className="accent-cyan-500 disabled:opacity-40"
+                />
+                Enabled
+              </label>
+            </div>
+            <p className="text-xs text-slate-500">
+              Concentric ripples moving outward from where the sea plane intersects the terrain surface.
+            </p>
+
+            <label className="block text-xs text-slate-400">
+              Ripple strength ({Math.round(sceneAppearance.water.edgeRipples.strength * 100)}%)
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={Math.round(sceneAppearance.water.edgeRipples.strength * 100)}
+                onChange={(event) =>
+                  updateEdgeRipples({ strength: Number(event.target.value) / 100 })
+                }
+                disabled={
+                  isSavingScene ||
+                  !sceneAppearance.water.enabled ||
+                  !sceneAppearance.water.edgeRipples.enabled
+                }
+                className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+              />
+            </label>
+
+            <label className="block text-xs text-slate-400">
+              Propagation speed ({sceneAppearance.water.edgeRipples.speed.toFixed(2)}×)
+              <input
+                type="range"
+                min={0}
+                max={Math.round(WATER_EDGE_RIPPLE_SPEED_MAX * 100)}
+                step={5}
+                value={Math.round(sceneAppearance.water.edgeRipples.speed * 100)}
+                onChange={(event) =>
+                  updateEdgeRipples({ speed: Number(event.target.value) / 100 })
+                }
+                disabled={
+                  isSavingScene ||
+                  !sceneAppearance.water.enabled ||
+                  !sceneAppearance.water.edgeRipples.enabled
+                }
+                className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+              />
+            </label>
+
+            <label className="block text-xs text-slate-400">
+              Ring frequency ({sceneAppearance.water.edgeRipples.waveScale.toFixed(2)}× — higher = tighter rings)
+              <input
+                type="range"
+                min={Math.round(WATER_EDGE_RIPPLE_WAVE_SCALE_MIN * 100)}
+                max={Math.round(WATER_EDGE_RIPPLE_WAVE_SCALE_MAX * 100)}
+                step={1}
+                value={Math.round(sceneAppearance.water.edgeRipples.waveScale * 100)}
+                onChange={(event) =>
+                  updateEdgeRipples({ waveScale: Number(event.target.value) / 100 })
+                }
+                disabled={
+                  isSavingScene ||
+                  !sceneAppearance.water.enabled ||
+                  !sceneAppearance.water.edgeRipples.enabled
+                }
+                className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+              />
+            </label>
+
+            <div className="grid grid-cols-2 gap-3">
+              <label className="text-xs text-slate-400">
+                Falloff ({sceneAppearance.water.edgeRipples.falloff.toFixed(3)})
+                <input
+                  type="range"
+                  min={0}
+                  max={Math.round(WATER_EDGE_RIPPLE_FALLOFF_MAX * 1000)}
+                  step={1}
+                  value={Math.round(sceneAppearance.water.edgeRipples.falloff * 1000)}
+                  onChange={(event) =>
+                    updateEdgeRipples({ falloff: Number(event.target.value) / 1000 })
+                  }
+                  disabled={
+                    isSavingScene ||
+                    !sceneAppearance.water.enabled ||
+                    !sceneAppearance.water.edgeRipples.enabled
+                  }
+                  className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+                />
+              </label>
+              <label className="text-xs text-slate-400">
+                Max distance ({Math.round(sceneAppearance.water.edgeRipples.maxDistance)} m)
+                <input
+                  type="range"
+                  min={10}
+                  max={WATER_EDGE_RIPPLE_MAX_DISTANCE_MAX}
+                  step={5}
+                  value={Math.round(sceneAppearance.water.edgeRipples.maxDistance)}
+                  onChange={(event) =>
+                    updateEdgeRipples({ maxDistance: Number(event.target.value) })
+                  }
+                  disabled={
+                    isSavingScene ||
+                    !sceneAppearance.water.enabled ||
+                    !sceneAppearance.water.edgeRipples.enabled
+                  }
+                  className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+                />
+              </label>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <label className="text-xs text-slate-400">
+                Displacement ({Math.round(sceneAppearance.water.edgeRipples.displacementStrength * 100)}%)
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={Math.round(sceneAppearance.water.edgeRipples.displacementStrength * 100)}
+                  onChange={(event) =>
+                    updateEdgeRipples({ displacementStrength: Number(event.target.value) / 100 })
+                  }
+                  disabled={
+                    isSavingScene ||
+                    !sceneAppearance.water.enabled ||
+                    !sceneAppearance.water.edgeRipples.enabled
+                  }
+                  className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+                />
+              </label>
+              <label className="text-xs text-slate-400">
+                Normal lighting ({Math.round(sceneAppearance.water.edgeRipples.normalStrength * 100)}%)
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={Math.round(sceneAppearance.water.edgeRipples.normalStrength * 100)}
+                  onChange={(event) =>
+                    updateEdgeRipples({ normalStrength: Number(event.target.value) / 100 })
+                  }
+                  disabled={
+                    isSavingScene ||
+                    !sceneAppearance.water.enabled ||
+                    !sceneAppearance.water.edgeRipples.enabled
+                  }
+                  className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+                />
+              </label>
+              <label className="block text-xs text-slate-400">
+                Peak / trough softness ({Math.round(sceneAppearance.water.edgeRipples.softness * 100)}% — rounds ripple crests)
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={Math.round(sceneAppearance.water.edgeRipples.softness * 100)}
+                  onChange={(event) =>
+                    updateEdgeRipples({ softness: Number(event.target.value) / 100 })
+                  }
+                  disabled={
+                    isSavingScene ||
+                    !sceneAppearance.water.enabled ||
+                    !sceneAppearance.water.edgeRipples.enabled
+                  }
+                  className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+                />
+              </label>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={saveWaterDefaults}
+              disabled={isSavingScene}
+              className="rounded-lg bg-cyan-800/80 px-3 py-2 text-sm text-white hover:bg-cyan-700 disabled:opacity-40"
+            >
+              Save current as defaults
+            </button>
+            <button
+              type="button"
+              onClick={resetWater}
+              disabled={isSavingScene}
+              className="rounded-lg bg-slate-800 px-3 py-2 text-sm text-white disabled:opacity-40"
+            >
+              Reset water defaults
+            </button>
+          </div>
         </AdminSection>
 
         <AdminSection
@@ -1346,6 +2494,9 @@ export function AdminPanel() {
               Redo
             </button>
           </div>
+          <p className="mt-2 text-xs text-slate-500">
+            Undoes prop placements, edits, and terrain sculpt strokes. Admin panel setting changes are not included.
+          </p>
         </AdminSection>
 
         <AdminSection
@@ -1365,6 +2516,14 @@ export function AdminPanel() {
             </p>
           )}
           <div className="flex flex-col gap-2">
+            <button
+              type="button"
+              disabled={isMapOpRunning || sceneAppearance.terrain.sculptVersion === 0}
+              onClick={() => void handleResetSculpting()}
+              className="rounded-lg bg-orange-700/90 px-3 py-2 text-sm text-white hover:bg-orange-600 disabled:opacity-40"
+            >
+              Reset Terrain Sculpting
+            </button>
             <button
               type="button"
               disabled={isMapOpRunning || !isMultiplayer}
@@ -1438,6 +2597,15 @@ export function AdminPanel() {
             <VisibilityToggle
               visible={settings.userVisibility.showSnapGrid}
               onToggle={() => updateVisibility({ showSnapGrid: !settings.userVisibility.showSnapGrid })}
+            />
+          </div>
+          <div className="mb-3 flex items-center justify-between">
+            <span className="text-sm text-slate-300">Show excavate / fill tools</span>
+            <VisibilityToggle
+              visible={settings.userVisibility.showSculptTools}
+              onToggle={() =>
+                updateVisibility({ showSculptTools: !settings.userVisibility.showSculptTools })
+              }
             />
           </div>
 
@@ -1522,6 +2690,64 @@ export function AdminPanel() {
                 value={settings.rateLimit.windowMinutes}
                 onChange={(event) =>
                   updateRateLimit({ windowMinutes: Number(event.target.value) || 1 })
+                }
+                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-white"
+              />
+            </label>
+          </div>
+
+          <p className="mb-2 mt-4 text-xs font-medium uppercase tracking-wide text-slate-500">
+            Terrain sculpt (excavate / fill)
+          </p>
+
+          <label className="mb-2 flex items-center gap-2 text-sm text-slate-300">
+            <input
+              type="checkbox"
+              checked={settings.rateLimit.terrainSculpt.enabled}
+              onChange={(event) =>
+                updateRateLimit({
+                  terrainSculpt: {
+                    ...settings.rateLimit.terrainSculpt,
+                    enabled: event.target.checked,
+                  },
+                })
+              }
+            />
+            Enable terrain sculpt rate limits
+          </label>
+
+          <div className="mb-3 grid grid-cols-2 gap-2">
+            <label className="text-xs text-slate-400">
+              Max sculpt strokes
+              <input
+                type="number"
+                min={1}
+                value={settings.rateLimit.terrainSculpt.maxStrokes}
+                onChange={(event) =>
+                  updateRateLimit({
+                    terrainSculpt: {
+                      ...settings.rateLimit.terrainSculpt,
+                      maxStrokes: Number(event.target.value) || 1,
+                    },
+                  })
+                }
+                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-white"
+              />
+            </label>
+            <label className="text-xs text-slate-400">
+              Sculpt window (minutes)
+              <input
+                type="number"
+                min={0.1}
+                step={0.1}
+                value={settings.rateLimit.terrainSculpt.windowMinutes}
+                onChange={(event) =>
+                  updateRateLimit({
+                    terrainSculpt: {
+                      ...settings.rateLimit.terrainSculpt,
+                      windowMinutes: Number(event.target.value) || 1,
+                    },
+                  })
                 }
                 className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-white"
               />

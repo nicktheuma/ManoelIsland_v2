@@ -6,17 +6,25 @@ import {
   useMemo,
   useReducer,
   useRef,
+  useState,
   type ReactNode,
 } from 'react'
 import { DEFAULT_PROP_LIBRARY, DEFAULT_SANDBOX_SETTINGS, SANDBOX_STORAGE_KEY } from '../config/defaults'
 import { normalizeSceneAppearance } from '../config/sceneAppearance'
 import { mergePropDefinition } from '../config/propDefaults'
 import {
-  canRedo,
-  canUndo,
   createInitialSandboxState,
   sandboxReducer,
 } from '../store/sandboxReducer'
+import {
+  canRedoStack,
+  canUndoStack,
+  createUndoStack,
+  pushUndoCommand,
+  redoCommand,
+  undoCommand,
+  type UndoCommand,
+} from '../store/undoStack'
 import { createPlacedProp, type PlacedProp } from '../types/props'
 import type { PropDefinition } from '../types/propLibrary'
 import type { CapturedCameraView, SandboxSettings, SceneAppearance } from '../types/sandbox'
@@ -28,6 +36,8 @@ import { syncSceneAppearanceToRemote } from '../utils/sceneAppearanceSettings'
 import { LAYOUT_LOCKED_MESSAGE } from '../lib/supabase'
 import { supabase } from '../lib/supabase'
 import { resolvePropVariation } from '../utils/propVariation'
+
+const REMOTE_SCENE_APPEARANCE_GRACE_MS = 3000
 
 type PersistedSandbox = {
   props: PlacedProp[]
@@ -54,6 +64,7 @@ type SandboxContextValue = {
   deleteSelected: () => void
   undo: () => void
   redo: () => void
+  pushUndo: (command: UndoCommand) => void
   setSettings: (settings: SandboxSettings) => void
   patchSettings: (patch: Partial<SandboxSettings>) => void
   getPropDefinition: (propId: string) => PropDefinition | undefined
@@ -113,6 +124,10 @@ function mergeSettings(stored: SandboxSettings | undefined): SandboxSettings {
         ...DEFAULT_SANDBOX_SETTINGS.rateLimit.perProp,
         ...stored.rateLimit?.perProp,
       },
+      terrainSculpt: {
+        ...DEFAULT_SANDBOX_SETTINGS.rateLimit.terrainSculpt,
+        ...stored.rateLimit?.terrainSculpt,
+      },
     },
     sceneAppearance: normalizeSceneAppearance({
       ...DEFAULT_SANDBOX_SETTINGS.sceneAppearance,
@@ -127,6 +142,33 @@ export function SandboxProvider({ children }: { children: ReactNode }) {
   const multiplayer = useMultiplayerSandbox(isAdmin)
   const terrainHeightRef = useRef<((x: number, z: number) => number) | null>(null)
   const cameraCaptureRef = useRef<(() => CapturedCameraView | null) | null>(null)
+  const undoStackRef = useRef(createUndoStack())
+  const [undoRevision, setUndoRevision] = useState(0)
+  const localSceneAppearancePatchAtRef = useRef(0)
+  const bumpUndoRevision = useCallback(() => setUndoRevision((value) => value + 1), [])
+
+  const pushUndo = useCallback(
+    (command: UndoCommand) => {
+      pushUndoCommand(undoStackRef.current, command)
+      bumpUndoRevision()
+    },
+    [bumpUndoRevision],
+  )
+
+  const runUndo = useCallback(() => {
+    const command = undoCommand(undoStackRef.current)
+    if (!command) return false
+    void Promise.resolve(command.undo()).finally(() => bumpUndoRevision())
+    return true
+  }, [bumpUndoRevision])
+
+  const runRedo = useCallback(() => {
+    const command = redoCommand(undoStackRef.current)
+    if (!command) return false
+    void Promise.resolve(command.redo()).finally(() => bumpUndoRevision())
+    return true
+  }, [bumpUndoRevision])
+
   const [state, dispatch] = useReducer(
     sandboxReducer,
     createInitialSandboxState(
@@ -173,10 +215,13 @@ export function SandboxProvider({ children }: { children: ReactNode }) {
         (payload) => {
           const row = payload.new as { scene_appearance?: Partial<SceneAppearance> }
           if (!row.scene_appearance) return
+          if (Date.now() - localSceneAppearancePatchAtRef.current < REMOTE_SCENE_APPEARANCE_GRACE_MS) {
+            return
+          }
           dispatch({
             type: 'PATCH_SETTINGS',
             patch: {
-              sceneAppearance: normalizeSceneAppearance(row.scene_appearance),
+              sceneAppearance: row.scene_appearance as SceneAppearance,
             },
           })
         },
@@ -196,10 +241,23 @@ export function SandboxProvider({ children }: { children: ReactNode }) {
   )
 
   const syncSceneAppearanceSettings = useCallback(
-    async (sceneAppearance: SceneAppearance, adminPassword: string) =>
-      syncSceneAppearanceToRemote(sceneAppearance, adminPassword),
+    async (sceneAppearance: SceneAppearance, adminPassword: string) => {
+      localSceneAppearancePatchAtRef.current = Date.now()
+      const result = await syncSceneAppearanceToRemote(sceneAppearance, adminPassword)
+      if (result.ok) {
+        localSceneAppearancePatchAtRef.current = Date.now()
+      }
+      return result
+    },
     [],
   )
+
+  const patchSettings = useCallback((patch: Partial<SandboxSettings>) => {
+    if (patch.sceneAppearance) {
+      localSceneAppearancePatchAtRef.current = Date.now()
+    }
+    dispatch({ type: 'PATCH_SETTINGS', patch })
+  }, [])
 
   const getPropDefinition = useCallback(
     (propId: string) => state.settings.propLibrary.find((prop) => prop.id === propId),
@@ -217,6 +275,8 @@ export function SandboxProvider({ children }: { children: ReactNode }) {
   const captureCameraView = useCallback(() => cameraCaptureRef.current?.() ?? null, [])
 
   const placedPropsForRules = multiplayer.enabled ? multiplayer.placedProps : state.props.present
+  const placedPropsRef = useRef(placedPropsForRules)
+  placedPropsRef.current = placedPropsForRules
 
   const canMutateProp = useCallback(
     (id: string) => {
@@ -273,29 +333,76 @@ export function SandboxProvider({ children }: { children: ReactNode }) {
           dispatch({ type: 'SET_PLACEMENT_ERROR', message: result.message })
           return false
         }
+        pushUndo({
+          label: 'Place prop',
+          undo: () => multiplayer.deleteProp(prop.id),
+          redo: () => {
+            multiplayer.insertProp(prop, { isAdmin })
+          },
+        })
         return true
       }
 
-      dispatch({ type: 'PLACE_PROP', prop })
+      dispatch({ type: 'SET_PROPS', props: [...placedPropsRef.current, prop] })
+      pushUndo({
+        label: 'Place prop',
+        undo: () =>
+          dispatch({
+            type: 'SET_PROPS',
+            props: placedPropsRef.current.filter((item) => item.id !== prop.id),
+          }),
+        redo: () =>
+          dispatch({
+            type: 'SET_PROPS',
+            props: [...placedPropsRef.current.filter((item) => item.id !== prop.id), prop],
+          }),
+      })
       return true
     },
-    [multiplayer, isAdmin, isLayoutLocked, placedPropsForRules, state.settings],
+    [multiplayer, isAdmin, isLayoutLocked, placedPropsForRules, pushUndo, state.settings],
   )
 
   const deleteProp = useCallback(
     (id: string) => {
       if (!canMutateProp(id)) return
 
+      const existing = placedPropsForRules.find((prop) => prop.id === id)
+      if (!existing) return
+
       if (multiplayer.enabled) {
+        pushUndo({
+          label: 'Delete prop',
+          undo: () => {
+            multiplayer.insertProp(existing, { isAdmin })
+          },
+          redo: () => multiplayer.deleteProp(id),
+        })
         multiplayer.deleteProp(id)
         if (state.selectedPropId === id) {
           dispatch({ type: 'SELECT_PROP', id: null })
         }
         return
       }
-      dispatch({ type: 'DELETE_PROP', id })
+
+      pushUndo({
+        label: 'Delete prop',
+        undo: () =>
+          dispatch({
+            type: 'SET_PROPS',
+            props: [...placedPropsRef.current.filter((item) => item.id !== id), existing],
+          }),
+        redo: () =>
+          dispatch({
+            type: 'SET_PROPS',
+            props: placedPropsRef.current.filter((item) => item.id !== id),
+          }),
+      })
+      dispatch({
+        type: 'SET_PROPS',
+        props: placedPropsRef.current.filter((item) => item.id !== id),
+      })
     },
-    [multiplayer, canMutateProp, state.selectedPropId],
+    [canMutateProp, isAdmin, multiplayer, placedPropsForRules, pushUndo, state.selectedPropId],
   )
 
   const wipeMapClutter = useCallback(async () => {
@@ -332,14 +439,45 @@ export function SandboxProvider({ children }: { children: ReactNode }) {
     (id: string, patch: Partial<PlacedProp>) => {
       if (!canMutateProp(id)) return
 
+      const existing = placedPropsForRules.find((prop) => prop.id === id)
+      if (!existing) return
+
+      const before = { ...existing }
+      const after = { ...existing, ...patch, id: existing.id }
+
       if (multiplayer.enabled) {
+        pushUndo({
+          label: 'Edit prop',
+          undo: () => multiplayer.updateProp(id, before),
+          redo: () => multiplayer.updateProp(id, after),
+        })
         multiplayer.updateProp(id, patch)
         return
       }
-      dispatch({ type: 'UPDATE_PROP', id, patch })
+
+      pushUndo({
+        label: 'Edit prop',
+        undo: () =>
+          dispatch({
+            type: 'SET_PROPS',
+            props: placedPropsRef.current.map((item) => (item.id === id ? before : item)),
+          }),
+        redo: () =>
+          dispatch({
+            type: 'SET_PROPS',
+            props: placedPropsRef.current.map((item) => (item.id === id ? after : item)),
+          }),
+      })
+      dispatch({
+        type: 'SET_PROPS',
+        props: placedPropsRef.current.map((item) => (item.id === id ? after : item)),
+      })
     },
-    [canMutateProp, multiplayer],
+    [canMutateProp, multiplayer, placedPropsForRules, pushUndo],
   )
+
+  const commandCanUndo = canUndoStack(undoStackRef.current)
+  const commandCanRedo = canRedoStack(undoStackRef.current)
 
   const value = useMemo<SandboxContextValue>(
     () => ({
@@ -349,17 +487,22 @@ export function SandboxProvider({ children }: { children: ReactNode }) {
       placementError: state.placementError,
       isMultiplayer: multiplayer.enabled,
       isMultiplayerLoading: multiplayer.isLoading,
-      canUndo: multiplayer.enabled ? false : canUndo(state),
-      canRedo: multiplayer.enabled ? false : canRedo(state),
+      canUndo: commandCanUndo,
+      canRedo: commandCanRedo,
       selectProp: (id) => dispatch({ type: 'SELECT_PROP', id }),
       placeProp,
       updateProp,
       deleteProp,
       deleteSelected,
-      undo: () => dispatch({ type: 'UNDO' }),
-      redo: () => dispatch({ type: 'REDO' }),
+      undo: () => {
+        void runUndo()
+      },
+      redo: () => {
+        void runRedo()
+      },
+      pushUndo,
       setSettings: (settings) => dispatch({ type: 'SET_SETTINGS', settings }),
-      patchSettings: (patch) => dispatch({ type: 'PATCH_SETTINGS', patch }),
+      patchSettings,
       getPropDefinition,
       clearPlacementError: () => dispatch({ type: 'SET_PLACEMENT_ERROR', message: null }),
       registerTerrainHeight,
@@ -375,7 +518,32 @@ export function SandboxProvider({ children }: { children: ReactNode }) {
       setLayoutLocked,
       isLayoutLocked,
     }),
-    [state, isAdmin, isLayoutLocked, multiplayer, placeProp, updateProp, deleteProp, deleteSelected, wipeMapClutter, wipeAllProps, setLayoutLocked, getPropDefinition, registerTerrainHeight, registerCameraCapture, captureCameraView, syncRateLimitSettings, syncSceneAppearanceSettings],
+    [
+      state,
+      isAdmin,
+      isLayoutLocked,
+      multiplayer,
+      placeProp,
+      updateProp,
+      deleteProp,
+      deleteSelected,
+      wipeMapClutter,
+      wipeAllProps,
+      setLayoutLocked,
+      getPropDefinition,
+      registerTerrainHeight,
+      registerCameraCapture,
+      captureCameraView,
+      syncRateLimitSettings,
+      syncSceneAppearanceSettings,
+      patchSettings,
+      pushUndo,
+      runUndo,
+      runRedo,
+      commandCanUndo,
+      commandCanRedo,
+      undoRevision,
+    ],
   )
 
   return <SandboxContext.Provider value={value}>{children}</SandboxContext.Provider>

@@ -4,6 +4,8 @@ export const DEFAULT_CAMERA_SETTINGS: CameraSettings = {
   position: [80, 60, 80],
   target: [0, 0, 0],
   fov: 50,
+  near: 0.1,
+  far: 500,
   minDistance: 25,
   maxDistance: 180,
   maxPolarAngleDeg: 87,
@@ -27,10 +29,15 @@ function normalizeVec3(
 export function normalizeCameraSettings(
   value: Partial<CameraSettings> | null | undefined,
 ): CameraSettings {
+  const near = clamp(value?.near ?? DEFAULT_CAMERA_SETTINGS.near, 0.01, 50, DEFAULT_CAMERA_SETTINGS.near)
+  const far = clamp(value?.far ?? DEFAULT_CAMERA_SETTINGS.far, 50, 10000, DEFAULT_CAMERA_SETTINGS.far)
+
   return {
     position: normalizeVec3(value?.position, DEFAULT_CAMERA_SETTINGS.position),
     target: normalizeVec3(value?.target, DEFAULT_CAMERA_SETTINGS.target),
     fov: clamp(value?.fov ?? DEFAULT_CAMERA_SETTINGS.fov, 20, 100, DEFAULT_CAMERA_SETTINGS.fov),
+    near,
+    far: Math.max(far, near + 1),
     minDistance: clamp(
       value?.minDistance ?? DEFAULT_CAMERA_SETTINGS.minDistance,
       5,

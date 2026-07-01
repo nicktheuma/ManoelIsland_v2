@@ -1,7 +1,14 @@
 import { getUserPlaceableProps } from '../utils/placementRules'
 import { useAdmin } from '../context/AdminProvider'
 import { useSandbox } from '../context/SandboxProvider'
-import { isPlacementMode, type InteractionMode } from '../types/interaction'
+import { useTerrainSculpt } from '../context/TerrainSculptProvider'
+import {
+  isPlacementMode,
+  isSculptMode,
+  sculptToolFromMode,
+  visibleInteractionModes,
+  type InteractionMode,
+} from '../types/interaction'
 import { ModeToggle } from './ModeToggle'
 
 type PropToolbarProps = {
@@ -26,22 +33,33 @@ export function PropToolbar({
   const { settings, placedProps, canUndo, canRedo, undo, redo, placementError, clearPlacementError, isLayoutLocked } =
     useSandbox()
   const { isAdmin } = useAdmin()
+  const { brush, setBrush, sculptError, setSculptError } = useTerrainSculpt()
 
   if (!settings.userVisibility.showPropToolbar) return null
 
   const placeableProps = getUserPlaceableProps(settings)
   const placementMode = isPlacementMode(mode)
+  const sculptMode = isSculptMode(mode)
+  const sculptTool = sculptToolFromMode(mode)
+  const modeOptions = visibleInteractionModes(settings.userVisibility.showSculptTools)
 
+  const sculptBlocked = isLayoutLocked && !isAdmin
   const placementBlocked = isLayoutLocked && !isAdmin
 
   const hint = settings.userVisibility.showPlacementHints
-    ? placementBlocked
-      ? 'Layout locked — new placements are disabled'
-      : placementMode
-      ? isTouchDevice
-        ? 'Place mode · Drag to position · Tap or Place to confirm'
-        : 'Place mode · Hover to preview · Click terrain to place'
-      : 'Edit mode · Click a prop to select · Click terrain to deselect'
+    ? sculptBlocked && sculptMode
+      ? 'Layout locked — terrain sculpting is disabled'
+      : placementBlocked && placementMode
+        ? 'Layout locked — new placements are disabled'
+        : sculptMode
+          ? isTouchDevice
+            ? `${sculptTool === 'excavate' ? 'Excavate' : 'Fill'} · One finger to sculpt · Two fingers to rotate`
+            : `${sculptTool === 'excavate' ? 'Excavate' : 'Fill'} · Left drag to sculpt · Right drag to rotate · Middle drag to pan · Scroll to zoom`
+          : placementMode
+            ? isTouchDevice
+              ? 'Place mode · Drag to position · Tap or Place to confirm'
+              : 'Place mode · Hover to preview · Click terrain to place'
+            : 'Edit mode · Click a prop to select · Click terrain to deselect'
     : null
 
   return (
@@ -52,18 +70,52 @@ export function PropToolbar({
         </p>
       )}
 
-      {placementError && placementMode && (
+      {(placementError && placementMode) || (sculptError && sculptMode) ? (
         <button
           type="button"
-          onClick={clearPlacementError}
+          onClick={() => {
+            clearPlacementError()
+            setSculptError(null)
+          }}
           className="rounded-full bg-red-950/90 px-4 py-1 text-sm text-red-200 backdrop-blur"
         >
-          {placementError} · dismiss
+          {(sculptError ?? placementError) + ' · dismiss'}
         </button>
-      )}
+      ) : null}
 
       <div className="flex max-w-[95vw] flex-wrap items-center justify-center gap-2 rounded-xl bg-slate-900/90 p-2 backdrop-blur">
-        <ModeToggle mode={mode} onChange={onModeChange} />
+        <ModeToggle mode={mode} onChange={onModeChange} modes={modeOptions} />
+
+        {sculptMode && settings.userVisibility.showSculptTools && (
+          <>
+            <label className="flex items-center gap-2 text-xs text-slate-400">
+              Radius
+              <input
+                type="range"
+                min={2}
+                max={40}
+                step={1}
+                value={brush.radius}
+                onChange={(event) => setBrush({ radius: Number(event.target.value) })}
+                className="w-24"
+              />
+              <span className="w-6 text-right text-slate-300">{brush.radius}</span>
+            </label>
+            <label className="flex items-center gap-2 text-xs text-slate-400">
+              Strength
+              <input
+                type="range"
+                min={0.1}
+                max={8}
+                step={0.1}
+                value={brush.strength}
+                onChange={(event) => setBrush({ strength: Number(event.target.value) })}
+                className="w-24"
+              />
+              <span className="w-8 text-right text-slate-300">{brush.strength.toFixed(1)}</span>
+            </label>
+          </>
+        )}
 
         {placementMode &&
           placeableProps.map((prop) => (

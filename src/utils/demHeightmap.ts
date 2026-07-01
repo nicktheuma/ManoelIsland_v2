@@ -4,7 +4,7 @@ import {
   type GeoBounds,
   type LatLng,
 } from './geo'
-import { geoBoundsFromReference, latLngFromGlobalPixel } from './geoReference'
+import { geoBoundsFromReference, latLngFromRasterPixel } from './geoReference'
 import type { TerrainGeoReference } from '../types/sandbox'
 
 const TERRARIUM_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium'
@@ -107,7 +107,7 @@ export async function sampleDemGrid(
 
   for (let row = 0; row < size; row++) {
     for (let col = 0; col < size; col++) {
-      const [lat, lng] = latLngFromGlobalPixel(col, row, size, geo)
+      const [lat, lng] = latLngFromRasterPixel(col, row, size, geo)
       const index = row * size + col
 
       if (!pointInPolygonFast(lat, lng, polygon)) {
@@ -132,6 +132,49 @@ export async function sampleDemGrid(
 
   if (!Number.isFinite(min) || !Number.isFinite(max)) {
     throw new Error('No elevation samples found inside the selected outline.')
+  }
+
+  return { elevations, min, max, zoom }
+}
+
+/** Sample elevation for the full geo bounding box (no polygon mask). */
+export async function sampleDemGridFull(
+  size: number,
+  geo: TerrainGeoReference,
+  onProgress?: (progress: DemSampleProgress) => void,
+): Promise<{ elevations: Float32Array; min: number; max: number; zoom: number }> {
+  const bounds = geoBoundsFromReference(geo)
+  const zoom = chooseTerrariumZoom(bounds)
+
+  onProgress?.({ phase: 'tiles', progress: 0 })
+  const tiles = await loadTilesForBounds(bounds, zoom)
+  onProgress?.({ phase: 'sampling', progress: 0 })
+
+  const elevations = new Float32Array(size * size)
+  let min = Infinity
+  let max = -Infinity
+  const total = size * size
+
+  for (let row = 0; row < size; row++) {
+    for (let col = 0; col < size; col++) {
+      const [lat, lng] = latLngFromRasterPixel(col, row, size, geo)
+      const index = row * size + col
+      const elevation = sampleElevationFromTiles(lat, lng, zoom, tiles)
+      elevations[index] = elevation ?? Number.NaN
+
+      if (Number.isFinite(elevation)) {
+        min = Math.min(min, elevation!)
+        max = Math.max(max, elevation!)
+      }
+
+      if ((row * size + col) % 32 === 0) {
+        onProgress?.({ phase: 'sampling', progress: (row * size + col) / total })
+      }
+    }
+  }
+
+  if (!Number.isFinite(min) || !Number.isFinite(max)) {
+    throw new Error('No elevation samples found in the selected area.')
   }
 
   return { elevations, min, max, zoom }

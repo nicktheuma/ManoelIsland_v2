@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { normalizeSceneAppearance } from '../config/sceneAppearance'
 import type { SceneAppearance } from '../types/sandbox'
 
-const SCENE_COMMIT_MS = 300
 const SCENE_SYNC_MS = 1000
 
 type UseAdminSceneAppearanceDraftOptions = {
@@ -30,7 +29,6 @@ export function useAdminSceneAppearanceDraft({
   onSyncEnd,
 }: UseAdminSceneAppearanceDraftOptions) {
   const [draft, setDraft] = useState(() => normalizeSceneAppearance(committed))
-  const commitTimerRef = useRef<number | null>(null)
   const syncTimerRef = useRef<number | null>(null)
   const latestDraftRef = useRef(draft)
   const isCommittingRef = useRef(false)
@@ -39,26 +37,30 @@ export function useAdminSceneAppearanceDraft({
 
   useEffect(() => {
     if (isCommittingRef.current) return
+    if (syncTimerRef.current !== null) return
     setDraft(normalizeSceneAppearance(committed))
   }, [committed])
 
   useEffect(
     () => () => {
-      if (commitTimerRef.current) window.clearTimeout(commitTimerRef.current)
       if (syncTimerRef.current) window.clearTimeout(syncTimerRef.current)
     },
     [],
   )
 
-  const flushToSandbox = useCallback(
-    (next: SceneAppearance) => {
-      const normalized = normalizeSceneAppearance(next)
+  const applyToSandbox = useCallback(
+    (normalized: SceneAppearance) => {
       isCommittingRef.current = true
       patchSettings({ sceneAppearance: normalized })
       window.requestAnimationFrame(() => {
         isCommittingRef.current = false
       })
+    },
+    [patchSettings],
+  )
 
+  const scheduleServerSync = useCallback(
+    (normalized: SceneAppearance, immediate: boolean) => {
       if (!isMultiplayer) {
         onLocalMessage?.('Scene settings saved locally.')
         return
@@ -66,21 +68,14 @@ export function useAdminSceneAppearanceDraft({
 
       if (syncTimerRef.current) window.clearTimeout(syncTimerRef.current)
       syncTimerRef.current = window.setTimeout(() => {
+        syncTimerRef.current = null
         onSyncStart?.()
         void syncSceneAppearanceSettings(normalized, getAdminPassword()).then((result) => {
           onSyncEnd?.(result.ok ? 'Scene applied for all visitors.' : result.message)
         })
-      }, SCENE_SYNC_MS)
+      }, immediate ? 0 : SCENE_SYNC_MS)
     },
-    [
-      getAdminPassword,
-      isMultiplayer,
-      onLocalMessage,
-      onSyncEnd,
-      onSyncStart,
-      patchSettings,
-      syncSceneAppearanceSettings,
-    ],
+    [getAdminPassword, isMultiplayer, onLocalMessage, onSyncEnd, onSyncStart, syncSceneAppearanceSettings],
   )
 
   const applySceneAppearance = useCallback(
@@ -88,20 +83,10 @@ export function useAdminSceneAppearanceDraft({
       const normalized = normalizeSceneAppearance(next)
       setDraft(normalized)
       latestDraftRef.current = normalized
-
-      if (commitTimerRef.current) window.clearTimeout(commitTimerRef.current)
-
-      if (options?.immediate) {
-        flushToSandbox(normalized)
-        return
-      }
-
-      commitTimerRef.current = window.setTimeout(() => {
-        commitTimerRef.current = null
-        flushToSandbox(latestDraftRef.current)
-      }, SCENE_COMMIT_MS)
+      applyToSandbox(normalized)
+      scheduleServerSync(normalized, options?.immediate ?? false)
     },
-    [flushToSandbox],
+    [applyToSandbox, scheduleServerSync],
   )
 
   return { sceneAppearance: draft, applySceneAppearance }

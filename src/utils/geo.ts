@@ -83,7 +83,8 @@ export function chooseTerrariumZoom(bounds: GeoBounds): number {
   if (span > 0.08) return 12
   if (span > 0.03) return 13
   if (span > 0.012) return 14
-  return 15
+  if (span > 0.006) return 15
+  return 16
 }
 
 export function chooseImageryZoom(bounds: GeoBounds): number {
@@ -92,7 +93,8 @@ export function chooseImageryZoom(bounds: GeoBounds): number {
   if (span > 0.08) return 14
   if (span > 0.03) return 15
   if (span > 0.012) return 16
-  return 17
+  if (span > 0.006) return 17
+  return 18
 }
 
 export function latLngToWorldPixel(

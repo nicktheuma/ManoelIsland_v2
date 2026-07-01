@@ -124,6 +124,11 @@ export const DEFAULT_RATE_LIMIT: RateLimitSettings = {
   maxPlacements: 3,
   windowMinutes: 5,
   perProp: {},
+  terrainSculpt: {
+    enabled: true,
+    maxStrokes: 12,
+    windowMinutes: 5,
+  },
 }
 
 export const DEFAULT_SANDBOX_SETTINGS: SandboxSettings = {
@@ -142,7 +147,8 @@ export const DEFAULT_SANDBOX_SETTINGS: SandboxSettings = {
     showPlacementHints: true,
     showZoneOverlays: false,
     showSnapGrid: false,
-    showUndoRedo: false,
+    showUndoRedo: true,
+    showSculptTools: true,
   },
   categories: DEFAULT_CATEGORIES,
   propLibrary: DEFAULT_PROP_LIBRARY,

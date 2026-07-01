@@ -8,6 +8,10 @@ import {
   getRateLimitSecondsRemaining,
   subscribeRateLimitSeconds,
 } from '../utils/rateLimitStore'
+import {
+  getSculptRateLimitSecondsRemaining,
+  subscribeSculptRateLimitSeconds,
+} from '../utils/sculptRateLimitStore'
 
 type PlacedPropsLayerProps = {
   onSelect?: (id: string) => void
@@ -101,6 +105,30 @@ export function RateLimitOverlay() {
         <p className="font-medium">Rate limit active</p>
         <p className="text-amber-200/80">
           Next placement in {minutes}:{seconds.toString().padStart(2, '0')}
+        </p>
+      </div>
+    </div>
+  )
+}
+
+export function SculptRateLimitOverlay() {
+  const secondsRemaining = useSyncExternalStore(
+    subscribeSculptRateLimitSeconds,
+    getSculptRateLimitSecondsRemaining,
+    () => 0,
+  )
+
+  if (secondsRemaining <= 0) return null
+
+  const minutes = Math.floor(secondsRemaining / 60)
+  const seconds = secondsRemaining % 60
+
+  return (
+    <div className="pointer-events-none absolute bottom-36 left-1/2 z-20 -translate-x-1/2">
+      <div className="rounded-lg border border-orange-500/40 bg-slate-900/90 px-4 py-2 text-center text-sm text-orange-100 shadow-lg backdrop-blur">
+        <p className="font-medium">Terrain sculpt limit active</p>
+        <p className="text-orange-200/80">
+          Next excavation or fill in {minutes}:{seconds.toString().padStart(2, '0')}
         </p>
       </div>
     </div>

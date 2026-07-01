@@ -8,6 +8,9 @@ export type SandboxSettingsRow = {
   max_placements: number
   window_minutes: number
   per_prop_limits: Record<string, RateLimitSettings['perProp'][string]>
+  terrain_sculpt_rate_limit_enabled?: boolean
+  terrain_sculpt_max_strokes?: number
+  terrain_sculpt_window_minutes?: number
   layout_locked: boolean
   scene_appearance?: Partial<SceneAppearance> | null
 }
@@ -17,6 +20,10 @@ export function rateLimitFromSettings(settings: SandboxSettings): RateLimitSetti
     ...DEFAULT_RATE_LIMIT,
     ...settings.rateLimit,
     perProp: { ...DEFAULT_RATE_LIMIT.perProp, ...settings.rateLimit?.perProp },
+    terrainSculpt: {
+      ...DEFAULT_RATE_LIMIT.terrainSculpt,
+      ...settings.rateLimit?.terrainSculpt,
+    },
   }
 }
 
@@ -33,6 +40,13 @@ export function mergeRateLimitFromRow(
       maxPlacements: row.max_placements,
       windowMinutes: Number(row.window_minutes),
       perProp: row.per_prop_limits ?? {},
+      terrainSculpt: {
+        enabled: row.terrain_sculpt_rate_limit_enabled ?? DEFAULT_RATE_LIMIT.terrainSculpt.enabled,
+        maxStrokes: row.terrain_sculpt_max_strokes ?? DEFAULT_RATE_LIMIT.terrainSculpt.maxStrokes,
+        windowMinutes: Number(
+          row.terrain_sculpt_window_minutes ?? DEFAULT_RATE_LIMIT.terrainSculpt.windowMinutes,
+        ),
+      },
     },
     sceneAppearance: normalizeSceneAppearance({
       ...settings.sceneAppearance,
@@ -59,7 +73,7 @@ export async function fetchRemoteSandboxSettings(): Promise<SandboxSettingsRow |
   const { data, error } = await supabase
     .from('sandbox_settings')
     .select(
-      'rate_limit_enabled, max_placements, window_minutes, per_prop_limits, layout_locked, scene_appearance',
+      'rate_limit_enabled, max_placements, window_minutes, per_prop_limits, terrain_sculpt_rate_limit_enabled, terrain_sculpt_max_strokes, terrain_sculpt_window_minutes, layout_locked, scene_appearance',
     )
     .eq('id', 1)
     .maybeSingle()
@@ -72,6 +86,9 @@ export async function fetchRemoteSandboxSettings(): Promise<SandboxSettingsRow |
       max_placements: DEFAULT_RATE_LIMIT.maxPlacements,
       window_minutes: DEFAULT_RATE_LIMIT.windowMinutes,
       per_prop_limits: {},
+      terrain_sculpt_rate_limit_enabled: DEFAULT_RATE_LIMIT.terrainSculpt.enabled,
+      terrain_sculpt_max_strokes: DEFAULT_RATE_LIMIT.terrainSculpt.maxStrokes,
+      terrain_sculpt_window_minutes: DEFAULT_RATE_LIMIT.terrainSculpt.windowMinutes,
       layout_locked,
     }
   }
@@ -100,6 +117,9 @@ export async function syncRateLimitSettingsToRemote(
     p_window_minutes: rateLimit.windowMinutes,
     p_per_prop_limits: rateLimit.perProp,
     p_sync_admin_password: true,
+    p_terrain_sculpt_rate_limit_enabled: rateLimit.terrainSculpt.enabled,
+    p_terrain_sculpt_max_strokes: rateLimit.terrainSculpt.maxStrokes,
+    p_terrain_sculpt_window_minutes: rateLimit.terrainSculpt.windowMinutes,
   })
 
   if (error) return { ok: false, message: error.message }
