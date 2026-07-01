@@ -16,10 +16,11 @@ export function getTerrainHeightAt(
   x: number,
   z: number,
   imageData: ImageData,
+  maxHeight = TERRAIN_MAX_HEIGHT,
 ): number {
   const u = x / TERRAIN_SIZE + 0.5
   const v = 1 - (z / TERRAIN_SIZE + 0.5)
-  return sampleHeightmapPixel(imageData, u, v) * TERRAIN_MAX_HEIGHT
+  return sampleHeightmapPixel(imageData, u, v) * maxHeight
 }
 
 export function heightmapToImageData(image: HTMLImageElement): ImageData {

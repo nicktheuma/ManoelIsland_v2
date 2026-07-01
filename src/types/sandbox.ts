@@ -83,12 +83,33 @@ export type FogSettings = {
   matchBackground: boolean
 }
 
+export type LatLng = [number, number]
+
+export type TerrainSurfaceStyle = 'grid' | 'orthophoto' | 'simplified'
+
+export type TerrainSettings = {
+  source: 'procedural' | 'dem'
+  polygon: LatLng[]
+  sampleSize: 64 | 96 | 128
+  maxHeight: number
+  version: number
+  lastMinElevation: number | null
+  lastMaxElevation: number | null
+  lastZoom: number | null
+  surfaceStyle: TerrainSurfaceStyle
+  surfaceVersion: number
+  surfaceOpacity: number
+  showGridOverlay: boolean
+  lastSurfaceZoom: number | null
+}
+
 export type SceneAppearance = {
   hdriPreset: HdriPresetId
   backgroundColor: string
   terrainFillColor: string
   terrainFillOpacity: number
   terrainGridColor: string
+  terrain: TerrainSettings
   water: WaterSettings
   fog: FogSettings
 }

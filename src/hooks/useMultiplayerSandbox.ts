@@ -9,7 +9,7 @@ import {
   fetchRemoteSandboxSettings,
   registerAdminSession,
 } from '../utils/rateLimitSettings'
-import { setLayoutLocked as setLayoutLockedRemote, wipeMapClutter } from '../utils/adminOperations'
+import { setLayoutLocked as setLayoutLockedRemote, wipeAllProps, wipeMapClutter } from '../utils/adminOperations'
 
 type InsertPropOptions = {
   isAdmin?: boolean
@@ -31,6 +31,9 @@ export type MultiplayerSandboxState = {
   updateProp: (id: string, patch: Partial<PlacedProp>) => void
   deleteProp: (id: string) => void
   wipeMapClutter: () => Promise<{ ok: true; deletedCount: number } | { ok: false; message: string }>
+  wipeAllProps: (
+    adminPassword: string,
+  ) => Promise<{ ok: true; deletedCount: number } | { ok: false; message: string }>
   setLayoutLocked: (
     locked: boolean,
   ) => Promise<{ ok: true; updatedCount: number } | { ok: false; message: string }>
@@ -328,6 +331,12 @@ export function useMultiplayerSandbox(isAdmin = false): MultiplayerSandboxState 
     return result
   }, [refreshPlacedProps])
 
+  const wipeAllPropsFn = useCallback(async (adminPassword: string) => {
+    const result = await wipeAllProps(adminPassword)
+    if (result.ok) await refreshPlacedProps()
+    return result
+  }, [refreshPlacedProps])
+
   const setLayoutLockedFn = useCallback(async (locked: boolean) => {
     setLayoutLocked(locked)
     setPlacedProps((prev) => prev.map((prop) => ({ ...prop, isLocked: locked })))
@@ -376,6 +385,7 @@ export function useMultiplayerSandbox(isAdmin = false): MultiplayerSandboxState 
     updateProp,
     deleteProp,
     wipeMapClutter: wipeMapClutterFn,
+    wipeAllProps: wipeAllPropsFn,
     setLayoutLocked: setLayoutLockedFn,
     refreshPlacedProps,
     refreshRateLimitCooldown,

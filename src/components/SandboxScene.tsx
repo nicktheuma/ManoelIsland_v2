@@ -20,6 +20,7 @@ import { TerrainHeightProvider, useTerrainHeight } from '../context/TerrainHeigh
 import { previewPlacementPosition, getUserPlaceableProps } from '../utils/placementRules'
 import { isCoarsePointerDevice } from '../utils/pointer'
 import { RateLimitOverlay } from './RateLimitOverlay'
+import { TerrainHeightmapProvider } from '../context/TerrainHeightmapProvider'
 import { useAdminShortcut } from '../hooks/useAdminShortcut'
 import { useSandboxShortcuts } from '../hooks/useSandboxShortcuts'
 import { isEditMode, isPlacementMode, type InteractionMode } from '../types/interaction'
@@ -280,5 +281,9 @@ function SandboxExperience() {
 }
 
 export function SandboxScene() {
-  return <SandboxExperience />
+  return (
+    <TerrainHeightmapProvider>
+      <SandboxExperience />
+    </TerrainHeightmapProvider>
+  )
 }

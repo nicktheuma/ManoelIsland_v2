@@ -1,14 +1,22 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { getAdminPassword } from '../../config/defaults'
 import { DEFAULT_FOG_SETTINGS } from '../../config/fogSettings'
 import { DEFAULT_SCENE_APPEARANCE, HDRI_OPTIONS, normalizeSceneAppearance } from '../../config/sceneAppearance'
+import {
+  DEFAULT_TERRAIN_SETTINGS,
+  MANOEL_ISLAND_POLYGON,
+  TERRAIN_SAMPLE_SIZE_OPTIONS,
+  TERRAIN_SURFACE_STYLE_OPTIONS,
+} from '../../config/terrainSettings'
 import { DEFAULT_WATER_SETTINGS, WATER_DETAIL_LAYER_OPTIONS, WATER_MESH_QUALITY_OPTIONS, WATER_STYLE_OPTIONS } from '../../config/waterSettings'
 import { useAdmin } from '../../context/AdminProvider'
 import { useSandbox } from '../../context/SandboxProvider'
+import { useTerrainHeightmap } from '../../context/TerrainHeightmapProvider'
 import { useAdminPanelLayout, type AdminPanelSectionId } from '../../hooks/useAdminPanelLayout'
 import type { PropDefinition } from '../../types/propLibrary'
-import type { FogSettings, PropRateLimit, SceneAppearance, WaterMeshQuality, WaterSettings } from '../../types/sandbox'
+import type { FogSettings, LatLng, PropRateLimit, SceneAppearance, TerrainSettings, WaterMeshQuality, WaterSettings } from '../../types/sandbox'
 import { getPropRateLimit } from '../../utils/rateLimitSettings'
+import { HeightmapMapPicker } from './HeightmapMapPicker'
 import { VisibilityToggle } from './VisibilityToggle'
 
 function AdminSection({
@@ -53,7 +61,7 @@ function AdminSection({
 
 export function AdminPanel() {
   const { isAdmin, isPanelOpen, togglePanel, logout, zoneDrawingMode, setZoneDrawingMode, draftZonePoints, clearDraftZone, finishDraftZone, adminProfile, isSupabaseAdmin } = useAdmin()
-  const { settings, setSettings, patchSettings, placedProps, canUndo, canRedo, undo, redo, syncRateLimitSettings, syncSceneAppearanceSettings, isAdminSession, isMultiplayer, wipeMapClutter, setLayoutLocked, isLayoutLocked } = useSandbox()
+  const { settings, setSettings, patchSettings, placedProps, canUndo, canRedo, undo, redo, syncRateLimitSettings, syncSceneAppearanceSettings, isAdminSession, isMultiplayer, wipeMapClutter, wipeAllProps, setLayoutLocked, isLayoutLocked } = useSandbox()
   const [zoneName, setZoneName] = useState('Allowed Zone')
   const [rateLimitMessage, setRateLimitMessage] = useState<string | null>(null)
   const [sceneMessage, setSceneMessage] = useState<string | null>(null)
@@ -61,11 +69,35 @@ export function AdminPanel() {
   const [isSavingRateLimits, setIsSavingRateLimits] = useState(false)
   const [mapOpMessage, setMapOpMessage] = useState<string | null>(null)
   const [isMapOpRunning, setIsMapOpRunning] = useState(false)
+  const [terrainDrawing, setTerrainDrawing] = useState(false)
+  const [draftTerrainPolygon, setDraftTerrainPolygon] = useState<LatLng[]>(() =>
+    normalizeSceneAppearance(settings.sceneAppearance).terrain.polygon,
+  )
+  const [terrainMessage, setTerrainMessage] = useState<string | null>(null)
+  const [isGeneratingTerrain, setIsGeneratingTerrain] = useState(false)
+  const [isGeneratingSurface, setIsGeneratingSurface] = useState(false)
   const { scrollRef, toggleSection, isExpanded } = useAdminPanelLayout(isPanelOpen)
+  const {
+    isLoading: isHeightmapLoading,
+    progress: heightmapProgress,
+    error: heightmapError,
+    generateFromPolygon,
+    isSurfaceLoading,
+    surfaceProgress,
+    surfaceError,
+    generateSurfaceFromPolygon,
+  } = useTerrainHeightmap()
+
+  const sceneAppearance = normalizeSceneAppearance(settings.sceneAppearance)
+
+  useEffect(() => {
+    if (!terrainDrawing && !isGeneratingTerrain) {
+      setDraftTerrainPolygon([...sceneAppearance.terrain.polygon])
+    }
+  }, [sceneAppearance.terrain.version, terrainDrawing, isGeneratingTerrain])
 
   if (!isAdmin || !isPanelOpen) return null
 
-  const sceneAppearance = normalizeSceneAppearance(settings.sceneAppearance)
   const section = (id: AdminPanelSectionId) => ({
     expanded: isExpanded(id),
     onToggleExpanded: () => toggleSection(id),
@@ -183,6 +215,33 @@ export function AdminPanel() {
     setMapOpMessage(result.ok ? `Removed ${result.deletedCount} props.` : result.message)
   }
 
+  const handleDeleteAllProps = async () => {
+    if (
+      !window.confirm(
+        'Delete every prop on the map, including admin placements? This cannot be undone.',
+      )
+    ) {
+      return
+    }
+
+    setIsMapOpRunning(true)
+    setMapOpMessage(null)
+    const beforeCount = placedProps.length
+    const result = await wipeAllProps(getAdminPassword())
+    setIsMapOpRunning(false)
+    if (!result.ok) {
+      setMapOpMessage(result.message)
+      return
+    }
+    if (result.deletedCount === 0 && beforeCount > 0) {
+      setMapOpMessage(
+        'No props were deleted. Re-login as admin (P) and run the wipe_all_props SQL migration in Supabase.',
+      )
+      return
+    }
+    setMapOpMessage(`Deleted all ${result.deletedCount} props.`)
+  }
+
   const handleLockLayout = async () => {
     setIsMapOpRunning(true)
     setMapOpMessage(null)
@@ -248,6 +307,87 @@ export function AdminPanel() {
       ...sceneAppearance,
       fog: DEFAULT_FOG_SETTINGS,
     })
+  }
+
+  const updateTerrain = (patch: Partial<TerrainSettings>) => {
+    void applySceneAppearance({
+      ...sceneAppearance,
+      terrain: { ...sceneAppearance.terrain, ...patch },
+    })
+  }
+
+  const handleFetchElevation = async () => {
+    if (draftTerrainPolygon.length < 3) {
+      setTerrainMessage('Draw at least 3 points on the map.')
+      return
+    }
+
+    setIsGeneratingTerrain(true)
+    setTerrainMessage(null)
+
+    const nextTerrain = await generateFromPolygon(draftTerrainPolygon, {
+      sampleSize: sceneAppearance.terrain.sampleSize,
+      maxHeight: sceneAppearance.terrain.maxHeight,
+    })
+
+    setIsGeneratingTerrain(false)
+
+    if (!nextTerrain) {
+      setTerrainMessage('Failed to generate elevation data.')
+      return
+    }
+
+    void applySceneAppearance({
+      ...sceneAppearance,
+      terrain: nextTerrain,
+    })
+    setTerrainDrawing(false)
+    setTerrainMessage(
+      `Applied real elevation (${nextTerrain.lastMinElevation?.toFixed(1)}–${nextTerrain.lastMaxElevation?.toFixed(1)} m, zoom ${nextTerrain.lastZoom}).`,
+    )
+  }
+
+  const resetTerrainDraft = () => {
+    setDraftTerrainPolygon([...sceneAppearance.terrain.polygon])
+    setTerrainDrawing(false)
+  }
+
+  const handleFetchSurface = async () => {
+    if (draftTerrainPolygon.length < 3) {
+      setTerrainMessage('Draw at least 3 points on the map.')
+      return
+    }
+
+    if (sceneAppearance.terrain.surfaceStyle === 'grid') {
+      setTerrainMessage('Choose orthophoto or simplified site map first.')
+      return
+    }
+
+    setIsGeneratingSurface(true)
+    setTerrainMessage(null)
+
+    const nextTerrain = await generateSurfaceFromPolygon(draftTerrainPolygon, {
+      sampleSize: sceneAppearance.terrain.sampleSize,
+      surfaceStyle: sceneAppearance.terrain.surfaceStyle,
+    })
+
+    setIsGeneratingSurface(false)
+
+    if (!nextTerrain) {
+      setTerrainMessage('Failed to generate terrain surface.')
+      return
+    }
+
+    void applySceneAppearance({
+      ...sceneAppearance,
+      terrain: nextTerrain,
+    })
+    setTerrainDrawing(false)
+    setTerrainMessage(
+      nextTerrain.surfaceStyle === 'orthophoto'
+        ? `Orthophoto applied${nextTerrain.lastSurfaceZoom !== null ? ` (zoom ${nextTerrain.lastSurfaceZoom})` : ''}.`
+        : 'Simplified site map applied.',
+    )
   }
 
   return (
@@ -355,6 +495,261 @@ export function AdminPanel() {
             Reset to defaults
           </button>
           {sceneMessage && <p className="text-xs text-slate-400">{sceneMessage}</p>}
+        </AdminSection>
+
+        <AdminSection title="Terrain heightmap" showVisibilityToggle={false} {...section('terrain')}>
+          <p className="text-xs text-slate-400">
+            Draw an outline on the map to define real-world elevation bounds. Data comes from AWS Terrarium tiles
+            (Mapzen). The PNG is cached locally; polygon and settings sync via Supabase.
+          </p>
+
+          <HeightmapMapPicker
+            polygon={draftTerrainPolygon}
+            drawingEnabled={terrainDrawing}
+            onAddPoint={(point) => {
+              if (!terrainDrawing) return
+              setDraftTerrainPolygon((current) => [...current, point])
+            }}
+          />
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setTerrainDrawing(!terrainDrawing)}
+              className={`rounded-lg px-3 py-2 text-sm ${
+                terrainDrawing ? 'bg-amber-500 text-black' : 'bg-slate-800 text-white'
+              }`}
+            >
+              {terrainDrawing ? 'Drawing…' : 'Draw outline'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setDraftTerrainPolygon((current) => current.slice(0, -1))}
+              disabled={draftTerrainPolygon.length === 0}
+              className="rounded-lg bg-slate-800 px-3 py-2 text-sm text-white disabled:opacity-40"
+            >
+              Undo point
+            </button>
+            <button
+              type="button"
+              onClick={() => setDraftTerrainPolygon([])}
+              className="rounded-lg bg-slate-800 px-3 py-2 text-sm text-white"
+            >
+              Clear
+            </button>
+            <button
+              type="button"
+              onClick={() => setDraftTerrainPolygon([...MANOEL_ISLAND_POLYGON])}
+              className="rounded-lg bg-slate-800 px-3 py-2 text-sm text-white"
+            >
+              Manoel preset
+            </button>
+            <button
+              type="button"
+              onClick={resetTerrainDraft}
+              className="rounded-lg bg-slate-800 px-3 py-2 text-sm text-white"
+            >
+              Reset draft
+            </button>
+          </div>
+
+          <p className="text-xs text-slate-500">
+            {draftTerrainPolygon.length} draft points (minimum 3). Applied outline has{' '}
+            {sceneAppearance.terrain.polygon.length} points (v{sceneAppearance.terrain.version}).
+          </p>
+
+          <label className="block text-sm text-slate-300">
+            Heightmap source
+            <select
+              value={sceneAppearance.terrain.source}
+              onChange={(event) =>
+                updateTerrain({ source: event.target.value as TerrainSettings['source'] })
+              }
+              disabled={isSavingScene || isGeneratingTerrain}
+              className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white disabled:opacity-40"
+            >
+              <option value="dem">Real elevation (DEM)</option>
+              <option value="procedural">Procedural placeholder</option>
+            </select>
+          </label>
+
+          <label className="block text-sm text-slate-300">
+            Sample resolution
+            <select
+              value={sceneAppearance.terrain.sampleSize}
+              onChange={(event) =>
+                updateTerrain({ sampleSize: Number(event.target.value) as TerrainSettings['sampleSize'] })
+              }
+              disabled={isSavingScene || isGeneratingTerrain}
+              className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white disabled:opacity-40"
+            >
+              {TERRAIN_SAMPLE_SIZE_OPTIONS.map((size) => (
+                <option key={size} value={size}>
+                  {size}×{size}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block text-xs text-slate-400">
+            Max terrain height ({sceneAppearance.terrain.maxHeight.toFixed(1)} units)
+            <input
+              type="range"
+              min={1}
+              max={30}
+              step={0.5}
+              value={sceneAppearance.terrain.maxHeight}
+              onChange={(event) => updateTerrain({ maxHeight: Number(event.target.value) })}
+              disabled={isSavingScene || isGeneratingTerrain}
+              className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+            />
+          </label>
+
+          {sceneAppearance.terrain.lastMinElevation !== null && sceneAppearance.terrain.lastMaxElevation !== null && (
+            <p className="text-xs text-slate-400">
+              Last fetch: {sceneAppearance.terrain.lastMinElevation.toFixed(1)}–
+              {sceneAppearance.terrain.lastMaxElevation.toFixed(1)} m real elevation
+              {sceneAppearance.terrain.lastZoom !== null ? ` · zoom ${sceneAppearance.terrain.lastZoom}` : ''}
+            </p>
+          )}
+
+          {(isGeneratingTerrain || isHeightmapLoading) && (
+            <p className="text-xs text-cyan-300">
+              {heightmapProgress?.phase === 'tiles'
+                ? 'Loading elevation tiles…'
+                : heightmapProgress
+                  ? `Sampling elevation (${Math.round(heightmapProgress.progress * 100)}%)…`
+                  : 'Processing heightmap…'}
+            </p>
+          )}
+
+          {heightmapError && <p className="text-xs text-red-300">{heightmapError}</p>}
+
+          <button
+            type="button"
+            onClick={() => void handleFetchElevation()}
+            disabled={
+              isSavingScene ||
+              isGeneratingTerrain ||
+              isHeightmapLoading ||
+              draftTerrainPolygon.length < 3 ||
+              sceneAppearance.terrain.source === 'procedural'
+            }
+            className="rounded-lg bg-cyan-600 px-3 py-2 text-sm text-white disabled:opacity-40"
+          >
+            {isGeneratingTerrain ? 'Fetching elevation…' : 'Fetch elevation & apply'}
+          </button>
+
+          <hr className="border-slate-800" />
+
+          <p className="text-xs text-slate-400">
+            Terrain texture: satellite orthophoto or a simplified OpenStreetMap site plan (roads, buildings,
+            trees). Uses the same outline as elevation.
+          </p>
+
+          <label className="block text-sm text-slate-300">
+            Surface style
+            <select
+              value={sceneAppearance.terrain.surfaceStyle}
+              onChange={(event) =>
+                updateTerrain({ surfaceStyle: event.target.value as TerrainSettings['surfaceStyle'] })
+              }
+              disabled={isSavingScene || isGeneratingSurface || isSurfaceLoading}
+              className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white disabled:opacity-40"
+            >
+              {TERRAIN_SURFACE_STYLE_OPTIONS.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          {sceneAppearance.terrain.surfaceStyle !== 'grid' && (
+            <>
+              <label className="block text-xs text-slate-400">
+                Surface opacity ({Math.round(sceneAppearance.terrain.surfaceOpacity * 100)}%)
+                <input
+                  type="range"
+                  min={20}
+                  max={100}
+                  value={Math.round(sceneAppearance.terrain.surfaceOpacity * 100)}
+                  onChange={(event) =>
+                    updateTerrain({ surfaceOpacity: Number(event.target.value) / 100 })
+                  }
+                  disabled={isSavingScene || isGeneratingSurface}
+                  className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+                />
+              </label>
+
+              <label className="flex items-center gap-2 text-sm text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={sceneAppearance.terrain.showGridOverlay}
+                  onChange={(event) => updateTerrain({ showGridOverlay: event.target.checked })}
+                  disabled={isSavingScene || isGeneratingSurface}
+                />
+                Overlay placement grid
+              </label>
+            </>
+          )}
+
+          {sceneAppearance.terrain.surfaceVersion > 0 && sceneAppearance.terrain.surfaceStyle !== 'grid' && (
+            <p className="text-xs text-slate-400">
+              Applied surface v{sceneAppearance.terrain.surfaceVersion}
+              {sceneAppearance.terrain.lastSurfaceZoom !== null
+                ? ` · imagery zoom ${sceneAppearance.terrain.lastSurfaceZoom}`
+                : ''}
+            </p>
+          )}
+
+          {(isGeneratingSurface || isSurfaceLoading) && (
+            <p className="text-xs text-cyan-300">
+              {surfaceProgress?.phase === 'tiles'
+                ? 'Loading satellite tiles…'
+                : surfaceProgress?.phase === 'compositing'
+                  ? `Compositing orthophoto (${Math.round(surfaceProgress.progress * 100)}%)…`
+                  : surfaceProgress?.phase === 'fetch'
+                    ? 'Fetching OpenStreetMap data…'
+                    : surfaceProgress?.phase === 'render'
+                      ? `Rendering site map (${Math.round(surfaceProgress.progress * 100)}%)…`
+                      : 'Processing terrain surface…'}
+            </p>
+          )}
+
+          {surfaceError && <p className="text-xs text-red-300">{surfaceError}</p>}
+
+          <button
+            type="button"
+            onClick={() => void handleFetchSurface()}
+            disabled={
+              isSavingScene ||
+              isGeneratingSurface ||
+              isSurfaceLoading ||
+              draftTerrainPolygon.length < 3 ||
+              sceneAppearance.terrain.surfaceStyle === 'grid'
+            }
+            className="rounded-lg bg-cyan-600 px-3 py-2 text-sm text-white disabled:opacity-40"
+          >
+            {isGeneratingSurface ? 'Applying surface…' : 'Fetch & apply surface'}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              resetTerrainDraft()
+              void applySceneAppearance({
+                ...sceneAppearance,
+                terrain: DEFAULT_TERRAIN_SETTINGS,
+              })
+            }}
+            disabled={isSavingScene || isGeneratingTerrain || isGeneratingSurface}
+            className="rounded-lg bg-slate-800 px-3 py-2 text-sm text-white disabled:opacity-40"
+          >
+            Reset terrain defaults
+          </button>
+
+          {terrainMessage && <p className="text-xs text-slate-400">{terrainMessage}</p>}
         </AdminSection>
 
         <AdminSection title="Fog" showVisibilityToggle={false} {...section('fog')}>
@@ -747,6 +1142,14 @@ export function AdminPanel() {
             </button>
             <button
               type="button"
+              disabled={isMapOpRunning || placedProps.length === 0}
+              onClick={() => void handleDeleteAllProps()}
+              className="rounded-lg bg-red-800/90 px-3 py-2 text-sm text-white hover:bg-red-700 disabled:opacity-40"
+            >
+              Delete All Props
+            </button>
+            <button
+              type="button"
               disabled={isMapOpRunning || !isMultiplayer || isLayoutLocked}
               onClick={() => void handleLockLayout()}
               className="rounded-lg bg-amber-600/90 px-3 py-2 text-sm text-white hover:bg-amber-500 disabled:opacity-40"
@@ -763,7 +1166,9 @@ export function AdminPanel() {
             </button>
           </div>
           {!isMultiplayer && (
-            <p className="mt-2 text-xs text-slate-500">Connect Supabase to use map operations.</p>
+            <p className="mt-2 text-xs text-slate-500">
+              Connect Supabase for clutter wipe and layout lock. Delete all props also works locally.
+            </p>
           )}
           {mapOpMessage && <p className="mt-2 text-xs text-slate-400">{mapOpMessage}</p>}
         </AdminSection>

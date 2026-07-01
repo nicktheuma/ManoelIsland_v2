@@ -1,10 +1,12 @@
-import { useMemo, useRef } from 'react'
-import { useLoader, type ThreeEvent } from '@react-three/fiber'
+import { useMemo, useRef, useEffect } from 'react'
+import { type ThreeEvent } from '@react-three/fiber'
 import * as THREE from 'three'
-import { HEIGHTMAP_URL, TERRAIN_MAX_HEIGHT, TERRAIN_SEGMENTS, TERRAIN_SIZE } from '../constants/terrain'
+import { TERRAIN_SEGMENTS, TERRAIN_SIZE } from '../constants/terrain'
 import { useSandbox } from '../context/SandboxProvider'
+import { useTerrainHeightmap } from '../context/TerrainHeightmapProvider'
 import { normalizeSceneAppearance } from '../config/sceneAppearance'
 import { createGridTexture } from '../utils/gridTexture'
+import { createTextureFromCanvas } from '../utils/terrainSurface'
 import { TerrainMaterial } from './TerrainMaterial'
 import {
   CLICK_DRAG_THRESHOLD_PX,
@@ -12,7 +14,8 @@ import {
   isTouchPointer,
 } from '../utils/pointer'
 
-export { TERRAIN_SIZE, TERRAIN_SEGMENTS, TERRAIN_MAX_HEIGHT }
+export { TERRAIN_SIZE, TERRAIN_SEGMENTS }
+export { TERRAIN_MAX_HEIGHT } from '../constants/terrain'
 
 function sampleHeightmap(
   imageData: ImageData,
@@ -29,6 +32,7 @@ function sampleHeightmap(
 function displaceGeometry(
   geometry: THREE.PlaneGeometry,
   imageData: ImageData,
+  maxHeight: number,
 ): void {
   const positions = geometry.attributes.position
 
@@ -37,7 +41,7 @@ function displaceGeometry(
     const y = positions.getY(i)
     const u = x / TERRAIN_SIZE + 0.5
     const v = 1 - (y / TERRAIN_SIZE + 0.5)
-    const height = sampleHeightmap(imageData, u, v) * TERRAIN_MAX_HEIGHT
+    const height = sampleHeightmap(imageData, u, v) * maxHeight
     positions.setZ(i, height)
   }
 
@@ -80,13 +84,25 @@ export function CustomTerrain({
   onTouchPlacementEnd,
 }: CustomTerrainProps) {
   const { settings } = useSandbox()
+  const { imageData, maxHeight, surfaceCanvas } = useTerrainHeightmap()
   const sceneAppearance = normalizeSceneAppearance(settings.sceneAppearance)
-  const { terrainFillColor, terrainFillOpacity, terrainGridColor, water } = sceneAppearance
-  const heightmap = useLoader(THREE.TextureLoader, HEIGHTMAP_URL)
-  const gridTexture = useMemo(
-    () => createGridTexture(terrainFillColor, terrainGridColor, terrainFillOpacity),
-    [terrainFillColor, terrainFillOpacity, terrainGridColor],
-  )
+  const { terrainFillColor, terrainFillOpacity, terrainGridColor, water, terrain } = sceneAppearance
+
+  const mapTexture = useMemo(() => {
+    if (terrain.surfaceStyle !== 'grid' && surfaceCanvas) {
+      return createTextureFromCanvas(surfaceCanvas)
+    }
+    return createGridTexture(terrainFillColor, terrainGridColor, terrainFillOpacity)
+  }, [
+    terrain.surfaceStyle,
+    surfaceCanvas,
+    terrainFillColor,
+    terrainFillOpacity,
+    terrainGridColor,
+  ])
+
+  useEffect(() => () => mapTexture.dispose(), [mapTexture])
+
   const terrainFillTransparent = terrainFillOpacity < 1
   const clipUnderwater = water.enabled
   const pointerSessionRef = useRef<PointerSession | null>(null)
@@ -216,23 +232,12 @@ export function CustomTerrain({
   )
 
   const displacedGeometry = useMemo(() => {
-    const image = heightmap.image as HTMLImageElement | undefined
-    if (!image || !image.complete) return null
-
-    const canvas = document.createElement('canvas')
-    canvas.width = image.width
-    canvas.height = image.height
-
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return null
-
-    ctx.drawImage(image, 0, 0)
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+    if (!imageData) return null
 
     const geo = geometry.clone()
-    displaceGeometry(geo, imageData)
+    displaceGeometry(geo, imageData, maxHeight)
     return geo
-  }, [geometry, heightmap])
+  }, [geometry, imageData, maxHeight])
 
   if (!displacedGeometry) return null
 
@@ -248,7 +253,7 @@ export function CustomTerrain({
       onPointerCancel={clearPointerSession}
     >
       <TerrainMaterial
-        map={gridTexture}
+        map={mapTexture}
         seaLevel={water.level}
         clipUnderwater={clipUnderwater}
         terrainFillTransparent={terrainFillTransparent}

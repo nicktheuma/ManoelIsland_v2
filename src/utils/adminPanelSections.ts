@@ -1,5 +1,6 @@
 export const ADMIN_PANEL_SECTIONS = [
   'sceneAppearance',
+  'terrain',
   'fog',
   'water',
   'historyControls',

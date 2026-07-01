@@ -69,6 +69,9 @@ type SandboxContextValue = {
   ) => Promise<{ ok: true } | { ok: false; message: string }>
   isAdminSession: boolean
   wipeMapClutter: () => Promise<{ ok: true; deletedCount: number } | { ok: false; message: string }>
+  wipeAllProps: (
+    adminPassword: string,
+  ) => Promise<{ ok: true; deletedCount: number } | { ok: false; message: string }>
   setLayoutLocked: (
     locked: boolean,
   ) => Promise<{ ok: true; updatedCount: number } | { ok: false; message: string }>
@@ -284,9 +287,20 @@ export function SandboxProvider({ children }: { children: ReactNode }) {
 
   const wipeMapClutter = useCallback(async () => {
     if (multiplayer.enabled) return multiplayer.wipeMapClutter()
+    const count = placedPropsForRules.length
     dispatch({ type: 'LOAD', props: [] })
-    return { ok: true as const, deletedCount: placedPropsForRules.length }
+    return { ok: true as const, deletedCount: count }
   }, [multiplayer, placedPropsForRules.length])
+
+  const wipeAllProps = useCallback(
+    async (adminPassword: string) => {
+      if (multiplayer.enabled) return multiplayer.wipeAllProps(adminPassword)
+      const count = placedPropsForRules.length
+      dispatch({ type: 'LOAD', props: [] })
+      return { ok: true as const, deletedCount: count }
+    },
+    [multiplayer, placedPropsForRules.length],
+  )
 
   const setLayoutLocked = useCallback(
     async (locked: boolean) => {
@@ -343,10 +357,11 @@ export function SandboxProvider({ children }: { children: ReactNode }) {
       syncSceneAppearanceSettings,
       isAdminSession: multiplayer.isAdminSession,
       wipeMapClutter,
+      wipeAllProps,
       setLayoutLocked,
       isLayoutLocked,
     }),
-    [state, isAdmin, isLayoutLocked, multiplayer, placeProp, updateProp, deleteProp, deleteSelected, wipeMapClutter, setLayoutLocked, getPropDefinition, registerTerrainHeight, syncRateLimitSettings, syncSceneAppearanceSettings],
+    [state, isAdmin, isLayoutLocked, multiplayer, placeProp, updateProp, deleteProp, deleteSelected, wipeMapClutter, wipeAllProps, setLayoutLocked, getPropDefinition, registerTerrainHeight, syncRateLimitSettings, syncSceneAppearanceSettings],
   )
 
   return <SandboxContext.Provider value={value}>{children}</SandboxContext.Provider>
