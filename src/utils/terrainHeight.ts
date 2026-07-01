@@ -1,4 +1,6 @@
 import { TERRAIN_MAX_HEIGHT, TERRAIN_SIZE } from '../constants/terrain'
+import type { TerrainGeoReference } from '../types/sandbox'
+import { worldUvFromWorld } from './geoReference'
 
 export function sampleHeightmapPixel(
   imageData: ImageData,
@@ -17,9 +19,11 @@ export function getTerrainHeightAt(
   z: number,
   imageData: ImageData,
   maxHeight = TERRAIN_MAX_HEIGHT,
+  geo?: TerrainGeoReference,
 ): number {
-  const u = x / TERRAIN_SIZE + 0.5
-  const v = 1 - (z / TERRAIN_SIZE + 0.5)
+  const { u, v } = geo
+    ? worldUvFromWorld(x, z, geo)
+    : { u: x / TERRAIN_SIZE + 0.5, v: 1 - (z / TERRAIN_SIZE + 0.5) }
   return sampleHeightmapPixel(imageData, u, v) * maxHeight
 }
 
@@ -38,6 +42,8 @@ export function projectPointOntoTerrain(
   z: number,
   imageData: ImageData,
   offset = 0.15,
+  maxHeight = TERRAIN_MAX_HEIGHT,
+  geo?: TerrainGeoReference,
 ): [number, number, number] {
-  return [x, getTerrainHeightAt(x, z, imageData) + offset, z]
+  return [x, getTerrainHeightAt(x, z, imageData, maxHeight, geo) + offset, z]
 }

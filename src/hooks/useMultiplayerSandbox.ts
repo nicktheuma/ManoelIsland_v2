@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { LAYOUT_LOCKED_MESSAGE, RATE_LIMIT_MESSAGE, isSupabaseConfigured, supabase } from '../lib/supabase'
 import type { PlacedPropRow } from '../types/database'
 import type { PlacedProp } from '../types/props'
@@ -9,7 +9,14 @@ import {
   fetchRemoteSandboxSettings,
   registerAdminSession,
 } from '../utils/rateLimitSettings'
+import { publishRateLimitSeconds } from '../utils/rateLimitStore'
 import { setLayoutLocked as setLayoutLockedRemote, wipeAllProps, wipeMapClutter } from '../utils/adminOperations'
+
+function deferAfterPaint(task: () => void) {
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(task)
+  })
+}
 
 type InsertPropOptions = {
   isAdmin?: boolean
@@ -23,7 +30,6 @@ export type MultiplayerSandboxState = {
   isAdminSession: boolean
   layoutLocked: boolean
   placedProps: PlacedProp[]
-  rateLimitSecondsRemaining: number
   insertProp: (
     prop: PlacedProp,
     options?: InsertPropOptions,
@@ -73,6 +79,10 @@ export function useMultiplayerSandbox(isAdmin = false): MultiplayerSandboxState 
 
     setRateLimitSecondsRemaining(typeof data === 'number' ? Math.max(0, data) : 0)
   }, [isAdmin, isAdminSession])
+
+  useEffect(() => {
+    publishRateLimitSeconds(isAdmin || isAdminSession ? 0 : rateLimitSecondsRemaining)
+  }, [isAdmin, isAdminSession, rateLimitSecondsRemaining])
 
   const registerAdminSessionFn = useCallback(async (password: string) => {
     const ok = await registerAdminSession(password)
@@ -251,28 +261,30 @@ export function useMultiplayerSandbox(isAdmin = false): MultiplayerSandboxState 
         prev.some((existing) => existing.id === prop.id) ? prev : [...prev, prop],
       )
 
-      void (async () => {
-        const { error } = await supabase!
-          .from('placed_props')
-          .insert(placedPropToInsert(prop, userId))
+      deferAfterPaint(() => {
+        void (async () => {
+          const { error } = await supabase!
+            .from('placed_props')
+            .insert(placedPropToInsert(prop, userId))
 
-        if (!error) return
+          if (!error) return
 
-        setPlacedProps((prev) => prev.filter((existing) => existing.id !== prop.id))
+          setPlacedProps((prev) => prev.filter((existing) => existing.id !== prop.id))
 
-        if (error.message.includes(RATE_LIMIT_MESSAGE) && !options?.isAdmin && !isAdminSession) {
-          await refreshRateLimitCooldown(prop.propId)
-          options?.onSyncError?.(RATE_LIMIT_MESSAGE)
-          return
-        }
+          if (error.message.includes(RATE_LIMIT_MESSAGE) && !options?.isAdmin && !isAdminSession) {
+            await refreshRateLimitCooldown(prop.propId)
+            options?.onSyncError?.(RATE_LIMIT_MESSAGE)
+            return
+          }
 
-        if (error.message.includes(LAYOUT_LOCKED_MESSAGE)) {
-          options?.onSyncError?.(LAYOUT_LOCKED_MESSAGE)
-          return
-        }
+          if (error.message.includes(LAYOUT_LOCKED_MESSAGE)) {
+            options?.onSyncError?.(LAYOUT_LOCKED_MESSAGE)
+            return
+          }
 
-        options?.onSyncError?.(error.message)
-      })()
+          options?.onSyncError?.(error.message)
+        })()
+      })
 
       return { ok: true }
     },
@@ -294,19 +306,21 @@ export function useMultiplayerSandbox(isAdmin = false): MultiplayerSandboxState 
     const rowPatch = placedPropPatchToRow(patch)
     if (Object.keys(rowPatch).length === 0) return
 
-    void (async () => {
-      const { error } = await supabase!
-        .from('placed_props')
-        .update(rowPatch)
-        .eq('id', id)
+    deferAfterPaint(() => {
+      void (async () => {
+        const { error } = await supabase!
+          .from('placed_props')
+          .update(rowPatch)
+          .eq('id', id)
 
-      if (error) {
-        console.error('Failed to sync prop update:', error.message)
-        setPlacedProps((prev) =>
-          prev.map((prop) => (prop.id === id ? previous : prop)),
-        )
-      }
-    })()
+        if (error) {
+          console.error('Failed to sync prop update:', error.message)
+          setPlacedProps((prev) =>
+            prev.map((prop) => (prop.id === id ? previous : prop)),
+          )
+        }
+      })()
+    })
   }, [])
 
   const refreshPlacedProps = useCallback(async () => {
@@ -362,34 +376,55 @@ export function useMultiplayerSandbox(isAdmin = false): MultiplayerSandboxState 
 
     if (!supabase) return
 
-    void (async () => {
-      const { error } = await supabase!.from('placed_props').delete().eq('id', id)
-      if (error) {
-        console.error('Failed to sync prop delete:', error.message)
-        setPlacedProps((prev) =>
-          prev.some((prop) => prop.id === id) ? prev : [...prev, removed],
-        )
-      }
-    })()
+    deferAfterPaint(() => {
+      void (async () => {
+        const { error } = await supabase!.from('placed_props').delete().eq('id', id)
+        if (error) {
+          console.error('Failed to sync prop delete:', error.message)
+          setPlacedProps((prev) =>
+            prev.some((prop) => prop.id === id) ? prev : [...prev, removed],
+          )
+        }
+      })()
+    })
   }, [])
 
-  return {
-    enabled,
-    isLoading,
-    isAuthenticated,
-    isAdminSession,
-    layoutLocked,
-    placedProps,
-    rateLimitSecondsRemaining: isAdmin || isAdminSession ? 0 : rateLimitSecondsRemaining,
-    insertProp,
-    updateProp,
-    deleteProp,
-    wipeMapClutter: wipeMapClutterFn,
-    wipeAllProps: wipeAllPropsFn,
-    setLayoutLocked: setLayoutLockedFn,
-    refreshPlacedProps,
-    refreshRateLimitCooldown,
-    registerAdminSession: registerAdminSessionFn,
-    clearAdminSession: clearAdminSessionFn,
-  }
+  return useMemo(
+    () => ({
+      enabled,
+      isLoading,
+      isAuthenticated,
+      isAdminSession,
+      layoutLocked,
+      placedProps,
+      insertProp,
+      updateProp,
+      deleteProp,
+      wipeMapClutter: wipeMapClutterFn,
+      wipeAllProps: wipeAllPropsFn,
+      setLayoutLocked: setLayoutLockedFn,
+      refreshPlacedProps,
+      refreshRateLimitCooldown,
+      registerAdminSession: registerAdminSessionFn,
+      clearAdminSession: clearAdminSessionFn,
+    }),
+    [
+      enabled,
+      isLoading,
+      isAuthenticated,
+      isAdminSession,
+      layoutLocked,
+      placedProps,
+      insertProp,
+      updateProp,
+      deleteProp,
+      wipeMapClutterFn,
+      wipeAllPropsFn,
+      setLayoutLockedFn,
+      refreshPlacedProps,
+      refreshRateLimitCooldown,
+      registerAdminSessionFn,
+      clearAdminSessionFn,
+    ],
+  )
 }

@@ -1,4 +1,5 @@
 import type { HdriPresetId, SceneAppearance } from '../types/sandbox'
+import { DEFAULT_CAMERA_SETTINGS, normalizeCameraSettings } from './cameraSettings'
 import { DEFAULT_TERRAIN_SETTINGS, normalizeTerrainSettings } from './terrainSettings'
 import { DEFAULT_FOG_SETTINGS, normalizeFogSettings } from './fogSettings'
 import { DEFAULT_WATER_SETTINGS, normalizeWaterSettings } from './waterSettings'
@@ -10,6 +11,7 @@ export const DEFAULT_SCENE_APPEARANCE: SceneAppearance = {
   terrainFillOpacity: 1,
   terrainGridColor: '#38bdf8',
   terrain: DEFAULT_TERRAIN_SETTINGS,
+  camera: DEFAULT_CAMERA_SETTINGS,
   water: DEFAULT_WATER_SETTINGS,
   fog: DEFAULT_FOG_SETTINGS,
 }
@@ -50,6 +52,10 @@ export function normalizeSceneAppearance(
     terrain: normalizeTerrainSettings({
       ...DEFAULT_SCENE_APPEARANCE.terrain,
       ...value?.terrain,
+    }),
+    camera: normalizeCameraSettings({
+      ...DEFAULT_SCENE_APPEARANCE.camera,
+      ...value?.camera,
     }),
     water: normalizeWaterSettings({
       ...DEFAULT_SCENE_APPEARANCE.water,

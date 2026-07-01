@@ -5,6 +5,7 @@ uniform float uWaveIntensity;
 uniform float uStyle;
 uniform float uWaveRandomness;
 uniform float uWaveSeed;
+uniform float uWaveScale;
 uniform float uDetailLayers;
 uniform float uDetailScale;
 uniform float uDetailStrength;
@@ -75,16 +76,27 @@ float sampleDetail(vec2 p) {
             + waveComponent(p, vec2(-0.55, 0.9), 0.32 * scale, 2.0, 0.35, 13.0);
   }
 
+  if (uDetailLayers > 2.5) {
+    detail += waveComponent(p, vec2(0.4, -0.9), 0.52 * scale, 2.8, 0.28, 14.0)
+            + waveComponent(p, vec2(-0.95, 0.35), 0.48 * scale, 2.6, 0.28, 15.0);
+  }
+
+  if (uDetailLayers > 3.5) {
+    detail += waveComponent(p, vec2(0.15, 0.95), 0.72 * scale, 3.4, 0.22, 16.0)
+            + waveComponent(p, vec2(-0.2, -0.95), 0.68 * scale, 3.2, 0.22, 17.0);
+  }
+
   return detail * strength;
 }
 
 float sampleElevation(vec2 xz) {
+  vec2 p = xz * max(uWaveScale, 0.1);
   float base;
-  if (uStyle < 0.5) base = waveCalm(xz);
-  else if (uStyle < 1.5) base = waveChoppy(xz);
-  else base = waveRipples(xz);
+  if (uStyle < 0.5) base = waveCalm(p);
+  else if (uStyle < 1.5) base = waveChoppy(p);
+  else base = waveRipples(p);
 
-  return base + sampleDetail(xz);
+  return base + sampleDetail(p);
 }
 
 void main() {

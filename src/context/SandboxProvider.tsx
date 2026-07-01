@@ -19,7 +19,7 @@ import {
 } from '../store/sandboxReducer'
 import { createPlacedProp, type PlacedProp } from '../types/props'
 import type { PropDefinition } from '../types/propLibrary'
-import type { SandboxSettings, SceneAppearance } from '../types/sandbox'
+import type { CapturedCameraView, SandboxSettings, SceneAppearance } from '../types/sandbox'
 import { useMultiplayerSandbox } from '../hooks/useMultiplayerSandbox'
 import { useLocalAdminActive } from '../hooks/useLocalAdminActive'
 import { applyPlacementRules } from '../utils/placementRules'
@@ -41,7 +41,6 @@ type SandboxContextValue = {
   placementError: string | null
   isMultiplayer: boolean
   isMultiplayerLoading: boolean
-  rateLimitSecondsRemaining: number
   canUndo: boolean
   canRedo: boolean
   selectProp: (id: string | null) => void
@@ -60,6 +59,8 @@ type SandboxContextValue = {
   getPropDefinition: (propId: string) => PropDefinition | undefined
   clearPlacementError: () => void
   registerTerrainHeight: (sampler: ((x: number, z: number) => number) | null) => void
+  registerCameraCapture: (fn: (() => CapturedCameraView | null) | null) => void
+  captureCameraView: () => CapturedCameraView | null
   registerAdminSession: (password: string) => Promise<boolean>
   clearAdminSession: () => Promise<void>
   syncRateLimitSettings: (adminPassword: string) => Promise<{ ok: true } | { ok: false; message: string }>
@@ -125,6 +126,7 @@ export function SandboxProvider({ children }: { children: ReactNode }) {
   const isAdmin = useLocalAdminActive()
   const multiplayer = useMultiplayerSandbox(isAdmin)
   const terrainHeightRef = useRef<((x: number, z: number) => number) | null>(null)
+  const cameraCaptureRef = useRef<(() => CapturedCameraView | null) | null>(null)
   const [state, dispatch] = useReducer(
     sandboxReducer,
     createInitialSandboxState(
@@ -138,7 +140,12 @@ export function SandboxProvider({ children }: { children: ReactNode }) {
       props: multiplayer.enabled ? [] : state.props.present,
       settings: state.settings,
     }
-    localStorage.setItem(SANDBOX_STORAGE_KEY, JSON.stringify(payload))
+
+    const timer = window.setTimeout(() => {
+      localStorage.setItem(SANDBOX_STORAGE_KEY, JSON.stringify(payload))
+    }, 500)
+
+    return () => window.clearTimeout(timer)
   }, [multiplayer.enabled, state.props.present, state.settings])
 
   useEffect(() => {
@@ -202,6 +209,12 @@ export function SandboxProvider({ children }: { children: ReactNode }) {
   const registerTerrainHeight = useCallback((sampler: ((x: number, z: number) => number) | null) => {
     terrainHeightRef.current = sampler
   }, [])
+
+  const registerCameraCapture = useCallback((fn: (() => CapturedCameraView | null) | null) => {
+    cameraCaptureRef.current = fn
+  }, [])
+
+  const captureCameraView = useCallback(() => cameraCaptureRef.current?.() ?? null, [])
 
   const placedPropsForRules = multiplayer.enabled ? multiplayer.placedProps : state.props.present
 
@@ -336,7 +349,6 @@ export function SandboxProvider({ children }: { children: ReactNode }) {
       placementError: state.placementError,
       isMultiplayer: multiplayer.enabled,
       isMultiplayerLoading: multiplayer.isLoading,
-      rateLimitSecondsRemaining: isAdmin || multiplayer.isAdminSession ? 0 : multiplayer.rateLimitSecondsRemaining,
       canUndo: multiplayer.enabled ? false : canUndo(state),
       canRedo: multiplayer.enabled ? false : canRedo(state),
       selectProp: (id) => dispatch({ type: 'SELECT_PROP', id }),
@@ -351,6 +363,8 @@ export function SandboxProvider({ children }: { children: ReactNode }) {
       getPropDefinition,
       clearPlacementError: () => dispatch({ type: 'SET_PLACEMENT_ERROR', message: null }),
       registerTerrainHeight,
+      registerCameraCapture,
+      captureCameraView,
       registerAdminSession: multiplayer.registerAdminSession,
       clearAdminSession: multiplayer.clearAdminSession,
       syncRateLimitSettings,
@@ -361,7 +375,7 @@ export function SandboxProvider({ children }: { children: ReactNode }) {
       setLayoutLocked,
       isLayoutLocked,
     }),
-    [state, isAdmin, isLayoutLocked, multiplayer, placeProp, updateProp, deleteProp, deleteSelected, wipeMapClutter, wipeAllProps, setLayoutLocked, getPropDefinition, registerTerrainHeight, syncRateLimitSettings, syncSceneAppearanceSettings],
+    [state, isAdmin, isLayoutLocked, multiplayer, placeProp, updateProp, deleteProp, deleteSelected, wipeMapClutter, wipeAllProps, setLayoutLocked, getPropDefinition, registerTerrainHeight, registerCameraCapture, captureCameraView, syncRateLimitSettings, syncSceneAppearanceSettings],
   )
 
   return <SandboxContext.Provider value={value}>{children}</SandboxContext.Provider>

@@ -1,10 +1,10 @@
 import {
-  bboxFromPolygon,
-  latLngToBboxPixel,
   pointInPolygon,
   type GeoBounds,
   type LatLng,
 } from './geo'
+import { geoBoundsFromReference, latLngToGlobalPixel } from './geoReference'
+import type { TerrainGeoReference } from '../types/sandbox'
 
 const OVERPASS_URL = 'https://overpass-api.de/api/interpreter'
 
@@ -116,16 +116,16 @@ function highwayColors(tags: Record<string, string> | undefined): { fill: string
 function drawPolygonPath(
   ctx: CanvasRenderingContext2D,
   coords: LatLng[],
-  bounds: GeoBounds,
+  geo: TerrainGeoReference,
   size: number,
 ): void {
   if (coords.length < 2) return
 
-  const first = latLngToBboxPixel(coords[0][0], coords[0][1], bounds, size)
+  const first = latLngToGlobalPixel(coords[0][0], coords[0][1], size, geo)
   ctx.moveTo(first.x, first.y)
 
   for (let i = 1; i < coords.length; i++) {
-    const point = latLngToBboxPixel(coords[i][0], coords[i][1], bounds, size)
+    const point = latLngToGlobalPixel(coords[i][0], coords[i][1], size, geo)
     ctx.lineTo(point.x, point.y)
   }
 }
@@ -133,7 +133,7 @@ function drawPolygonPath(
 function drawPolyline(
   ctx: CanvasRenderingContext2D,
   coords: LatLng[],
-  bounds: GeoBounds,
+  geo: TerrainGeoReference,
   size: number,
   width: number,
   color: string,
@@ -147,7 +147,7 @@ function drawPolyline(
     ctx.lineCap = 'round'
     ctx.lineJoin = 'round'
     ctx.beginPath()
-    drawPolygonPath(ctx, coords, bounds, size)
+    drawPolygonPath(ctx, coords, geo, size)
     ctx.stroke()
   }
 
@@ -156,14 +156,14 @@ function drawPolyline(
   ctx.lineCap = 'round'
   ctx.lineJoin = 'round'
   ctx.beginPath()
-  drawPolygonPath(ctx, coords, bounds, size)
+  drawPolygonPath(ctx, coords, geo, size)
   ctx.stroke()
 }
 
 function applyPolygonMask(
   ctx: CanvasRenderingContext2D,
   polygon: LatLng[],
-  bounds: GeoBounds,
+  geo: TerrainGeoReference,
   size: number,
 ): void {
   const mask = document.createElement('canvas')
@@ -174,10 +174,10 @@ function applyPolygonMask(
 
   maskCtx.fillStyle = '#000'
   maskCtx.beginPath()
-  const first = latLngToBboxPixel(polygon[0][0], polygon[0][1], bounds, size)
+  const first = latLngToGlobalPixel(polygon[0][0], polygon[0][1], size, geo)
   maskCtx.moveTo(first.x, first.y)
   for (let i = 1; i < polygon.length; i++) {
-    const point = latLngToBboxPixel(polygon[i][0], polygon[i][1], bounds, size)
+    const point = latLngToGlobalPixel(polygon[i][0], polygon[i][1], size, geo)
     maskCtx.lineTo(point.x, point.y)
   }
   maskCtx.closePath()
@@ -191,9 +191,10 @@ function applyPolygonMask(
 export async function buildSimplifiedSiteMap(
   polygon: LatLng[],
   size: number,
+  geo: TerrainGeoReference,
   onProgress?: (progress: SimplifiedMapProgress) => void,
 ): Promise<{ canvas: HTMLCanvasElement; objectUrl: string; zoom: null }> {
-  const bounds = bboxFromPolygon(polygon)
+  const bounds = geoBoundsFromReference(geo)
 
   onProgress?.({ phase: 'fetch', progress: 0 })
   const response = await fetchOverpass(bounds)
@@ -223,7 +224,7 @@ export async function buildSimplifiedSiteMap(
     if (coords.length < 3) continue
     ctx.fillStyle = way.tags?.natural === 'wood' ? STYLE.woodland : STYLE.park
     ctx.beginPath()
-    drawPolygonPath(ctx, coords, bounds, size)
+    drawPolygonPath(ctx, coords, geo, size)
     ctx.closePath()
     ctx.fill()
   }
@@ -237,7 +238,7 @@ export async function buildSimplifiedSiteMap(
     ctx.strokeStyle = STYLE.buildingStroke
     ctx.lineWidth = 0.75
     ctx.beginPath()
-    drawPolygonPath(ctx, coords, bounds, size)
+    drawPolygonPath(ctx, coords, geo, size)
     ctx.closePath()
     ctx.fill()
     ctx.stroke()
@@ -248,7 +249,7 @@ export async function buildSimplifiedSiteMap(
   for (const way of highways) {
     const coords = wayCoordinates(way, nodes)
     const { fill, casing } = highwayColors(way.tags)
-    drawPolyline(ctx, coords, bounds, size, highwayWidth(way.tags), fill, casing)
+    drawPolyline(ctx, coords, geo, size, highwayWidth(way.tags), fill, casing)
   }
 
   onProgress?.({ phase: 'render', progress: 0.8 })
@@ -257,7 +258,7 @@ export async function buildSimplifiedSiteMap(
     if (element.type !== 'node' || !element.tags) continue
     if (!pointInPolygon(element.lat, element.lon, polygon)) continue
 
-    const point = latLngToBboxPixel(element.lat, element.lon, bounds, size)
+    const point = latLngToGlobalPixel(element.lat, element.lon, size, geo)
     const isTree = element.tags.natural === 'tree'
     const isShrub = element.tags.natural === 'shrub'
     if (!isTree && !isShrub) continue
@@ -268,7 +269,7 @@ export async function buildSimplifiedSiteMap(
     ctx.fill()
   }
 
-  applyPolygonMask(ctx, polygon, bounds, size)
+  applyPolygonMask(ctx, polygon, geo, size)
 
   onProgress?.({ phase: 'render', progress: 1 })
 

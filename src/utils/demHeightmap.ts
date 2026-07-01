@@ -1,10 +1,11 @@
 import {
-  bboxFromPolygon,
   chooseTerrariumZoom,
   latLngToTilePixel,
   type GeoBounds,
   type LatLng,
 } from './geo'
+import { geoBoundsFromReference, latLngFromGlobalPixel } from './geoReference'
+import type { TerrainGeoReference } from '../types/sandbox'
 
 const TERRARIUM_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium'
 
@@ -88,9 +89,10 @@ export type DemSampleProgress = {
 export async function sampleDemGrid(
   polygon: LatLng[],
   size: number,
+  geo: TerrainGeoReference,
   onProgress?: (progress: DemSampleProgress) => void,
 ): Promise<{ elevations: Float32Array; min: number; max: number; zoom: number }> {
-  const bounds = bboxFromPolygon(polygon)
+  const bounds = geoBoundsFromReference(geo)
   const zoom = chooseTerrariumZoom(bounds)
 
   onProgress?.({ phase: 'tiles', progress: 0 })
@@ -104,10 +106,8 @@ export async function sampleDemGrid(
   const total = size * size
 
   for (let row = 0; row < size; row++) {
-    const lat = bounds.north - ((bounds.north - bounds.south) * row) / (size - 1)
-
     for (let col = 0; col < size; col++) {
-      const lng = bounds.west + ((bounds.east - bounds.west) * col) / (size - 1)
+      const [lat, lng] = latLngFromGlobalPixel(col, row, size, geo)
       const index = row * size + col
 
       if (!pointInPolygonFast(lat, lng, polygon)) {
@@ -185,9 +185,10 @@ export function imageDataToObjectUrl(imageData: ImageData): string {
 export async function buildHeightmapFromPolygon(
   polygon: LatLng[],
   size: number,
+  geo: TerrainGeoReference,
   onProgress?: (progress: DemSampleProgress) => void,
 ): Promise<{ imageData: ImageData; objectUrl: string; min: number; max: number; zoom: number }> {
-  const { elevations, min, max, zoom } = await sampleDemGrid(polygon, size, onProgress)
+  const { elevations, min, max, zoom } = await sampleDemGrid(polygon, size, geo, onProgress)
   const imageData = elevationsToGrayscaleImageData(elevations, size, min, max)
   const objectUrl = imageDataToObjectUrl(imageData)
   return { imageData, objectUrl, min, max, zoom }

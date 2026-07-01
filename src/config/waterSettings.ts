@@ -9,10 +9,12 @@ export const WATER_MESH_QUALITY_OPTIONS: { id: WaterMeshQuality; label: string; 
   { id: 'high', label: 'High', segments: 96 },
 ]
 
-export const WATER_DETAIL_LAYER_OPTIONS: { id: 0 | 1 | 2; label: string }[] = [
+export const WATER_DETAIL_LAYER_OPTIONS: { id: WaterSettings['detailLayers']; label: string }[] = [
   { id: 0, label: 'Off' },
   { id: 1, label: '1 detail layer' },
   { id: 2, label: '2 detail layers' },
+  { id: 3, label: '3 detail layers' },
+  { id: 4, label: '4 detail layers' },
 ]
 
 export const WATER_STYLE_OPTIONS: { id: WaterStyleId; label: string }[] = [
@@ -26,16 +28,17 @@ export const DEFAULT_WATER_SETTINGS: WaterSettings = {
   level: 0,
   planeSize: 530,
   edgeFade: 0.61,
-  meshQuality: 'high',
+  meshQuality: 'medium',
   waveHeight: 0.49,
   waveIntensity: 2.6,
   waveRandomness: 0.25,
   waveSeed: 516,
-  detailLayers: 2,
+  waveScale: 1,
+  detailLayers: 1,
   detailScale: 7.1,
-  detailStrength: 0.98,
+  detailStrength: 0.75,
   animationSpeed: 2.58,
-  style: 'ripples',
+  style: 'calm',
   color: '#009ceb',
   opacity: 0.42,
   metalness: 1,
@@ -70,8 +73,8 @@ function clamp(value: number, min: number, max: number, fallback: number): numbe
   return Math.min(max, Math.max(min, value))
 }
 
-function normalizeDetailLayers(value: number | undefined): 0 | 1 | 2 {
-  if (value === 1 || value === 2) return value
+function normalizeDetailLayers(value: number | undefined): WaterSettings['detailLayers'] {
+  if (value === 1 || value === 2 || value === 3 || value === 4) return value
   return 0
 }
 
@@ -89,7 +92,7 @@ export function normalizeWaterSettings(
     level: clamp(value?.level ?? DEFAULT_WATER_SETTINGS.level, -2, 8, DEFAULT_WATER_SETTINGS.level),
     planeSize: clamp(
       value?.planeSize ?? DEFAULT_WATER_SETTINGS.planeSize,
-      100,
+      50,
       2000,
       DEFAULT_WATER_SETTINGS.planeSize,
     ),
@@ -114,6 +117,12 @@ export function normalizeWaterSettings(
       DEFAULT_WATER_SETTINGS.waveRandomness,
     ),
     waveSeed: clamp(value?.waveSeed ?? DEFAULT_WATER_SETTINGS.waveSeed, 0, 999, DEFAULT_WATER_SETTINGS.waveSeed),
+    waveScale: clamp(
+      value?.waveScale ?? DEFAULT_WATER_SETTINGS.waveScale,
+      0.1,
+      8,
+      DEFAULT_WATER_SETTINGS.waveScale,
+    ),
     detailLayers: normalizeDetailLayers(value?.detailLayers),
     detailScale: clamp(
       value?.detailScale ?? DEFAULT_WATER_SETTINGS.detailScale,

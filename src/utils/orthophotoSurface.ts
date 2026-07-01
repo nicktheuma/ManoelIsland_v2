@@ -1,11 +1,12 @@
 import {
-  bboxFromPolygon,
   chooseImageryZoom,
   latLngToWorldPixel,
   pointInPolygon,
   type GeoBounds,
   type LatLng,
 } from './geo'
+import { geoBoundsFromReference, latLngFromGlobalPixel } from './geoReference'
+import type { TerrainGeoReference } from '../types/sandbox'
 
 type TileKey = string
 
@@ -99,10 +100,11 @@ async function loadTilesForBounds(
 export async function buildMaskedRasterSurface(
   polygon: LatLng[],
   size: number,
+  geo: TerrainGeoReference,
   tileUrl: (z: number, x: number, y: number) => string,
   onProgress?: (progress: TileFetchProgress) => void,
 ): Promise<{ canvas: HTMLCanvasElement; objectUrl: string; zoom: number }> {
-  const bounds = bboxFromPolygon(polygon)
+  const bounds = geoBoundsFromReference(geo)
   const zoom = chooseImageryZoom(bounds)
 
   onProgress?.({ phase: 'tiles', progress: 0 })
@@ -120,10 +122,8 @@ export async function buildMaskedRasterSurface(
   const data = imageData.data
 
   for (let row = 0; row < size; row++) {
-    const lat = bounds.north - ((bounds.north - bounds.south) * row) / (size - 1)
-
     for (let col = 0; col < size; col++) {
-      const lng = bounds.west + ((bounds.east - bounds.west) * col) / (size - 1)
+      const [lat, lng] = latLngFromGlobalPixel(col, row, size, geo)
       const offset = (row * size + col) * 4
 
       if (!pointInPolygon(lat, lng, polygon)) {
@@ -162,11 +162,13 @@ const ESRI_WORLD_IMAGERY =
 export async function buildOrthophotoSurface(
   polygon: LatLng[],
   size: number,
+  geo: TerrainGeoReference,
   onProgress?: (progress: TileFetchProgress) => void,
 ): Promise<{ canvas: HTMLCanvasElement; objectUrl: string; zoom: number }> {
   return buildMaskedRasterSurface(
     polygon,
     size,
+    geo,
     (z, x, y) => `${ESRI_WORLD_IMAGERY}/${z}/${y}/${x}`,
     onProgress,
   )

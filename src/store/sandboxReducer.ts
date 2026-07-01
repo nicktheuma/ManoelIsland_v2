@@ -2,6 +2,7 @@ import type { PlacedProp } from '../types/props'
 import type { SandboxSettings } from '../types/sandbox'
 import { DEFAULT_SANDBOX_SETTINGS } from '../config/defaults'
 import { normalizeSceneAppearance } from '../config/sceneAppearance'
+import { normalizeCameraSettings } from '../config/cameraSettings'
 import { normalizeTerrainSettings } from '../config/terrainSettings'
 
 type PropHistory = {
@@ -131,6 +132,10 @@ export function sandboxReducer(state: SandboxState, action: SandboxAction): Sand
                 terrain: normalizeTerrainSettings({
                   ...state.settings.sceneAppearance?.terrain,
                   ...action.patch.sceneAppearance.terrain,
+                }),
+                camera: normalizeCameraSettings({
+                  ...state.settings.sceneAppearance?.camera,
+                  ...action.patch.sceneAppearance.camera,
                 }),
               })
             : state.settings.sceneAppearance ?? DEFAULT_SANDBOX_SETTINGS.sceneAppearance,

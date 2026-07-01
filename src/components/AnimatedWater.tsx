@@ -1,5 +1,6 @@
 import { useFrame } from '@react-three/fiber'
-import { useEffect, useMemo, useRef } from 'react'
+import type { ThreeEvent } from '@react-three/fiber'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
 import { normalizeSceneAppearance } from '../config/sceneAppearance'
 import { resolveFogColor } from '../config/fogSettings'
@@ -7,7 +8,15 @@ import { hexToVec3, waterMeshSegments, waterStyleIndex } from '../config/waterSe
 import { useSandbox } from '../context/SandboxProvider'
 import { waterFragmentShader, waterVertexShader } from '../shaders/waterShader'
 
-export function AnimatedWater() {
+type AnimatedWaterProps = {
+  placementPreviewEnabled?: boolean
+  onPreviewMove?: (point: THREE.Vector3, valid: boolean) => void
+}
+
+export function AnimatedWater({
+  placementPreviewEnabled = false,
+  onPreviewMove,
+}: AnimatedWaterProps = {}) {
   const { settings } = useSandbox()
   const water = normalizeSceneAppearance(settings.sceneAppearance).water
   const materialRef = useRef<THREE.ShaderMaterial>(null)
@@ -27,6 +36,7 @@ export function AnimatedWater() {
       uWaveIntensity: { value: water.waveIntensity },
       uWaveRandomness: { value: water.waveRandomness },
       uWaveSeed: { value: water.waveSeed },
+      uWaveScale: { value: water.waveScale },
       uDetailLayers: { value: water.detailLayers },
       uDetailScale: { value: water.detailScale },
       uDetailStrength: { value: water.detailStrength },
@@ -62,6 +72,7 @@ export function AnimatedWater() {
     material.uniforms.uWaveIntensity.value = currentWater.waveIntensity
     material.uniforms.uWaveRandomness.value = currentWater.waveRandomness
     material.uniforms.uWaveSeed.value = currentWater.waveSeed
+    material.uniforms.uWaveScale.value = currentWater.waveScale
     material.uniforms.uDetailLayers.value = currentWater.detailLayers
     material.uniforms.uDetailScale.value = currentWater.detailScale
     material.uniforms.uDetailStrength.value = currentWater.detailStrength
@@ -89,25 +100,48 @@ export function AnimatedWater() {
     material.uniforms.uTime.value = state.clock.elapsedTime * animationSpeedRef.current
   })
 
+  const handleWaterPreviewMove = useCallback(
+    (event: ThreeEvent<PointerEvent>) => {
+      if (!placementPreviewEnabled || !onPreviewMove) return
+      if (event.buttons !== 0) return
+      event.stopPropagation()
+      onPreviewMove(event.point, false)
+    },
+    [onPreviewMove, placementPreviewEnabled],
+  )
+
   if (!water.enabled) return null
 
   const needsTransparency = water.opacity < 0.99 || water.edgeFade > 0.001
 
   return (
-    <mesh
-      geometry={geometry}
-      rotation={[-Math.PI / 2, 0, 0]}
-      position={[0, water.level, 0]}
-      renderOrder={-1}
-    >
-      <shaderMaterial
-        ref={materialRef}
-        uniforms={uniforms}
-        vertexShader={waterVertexShader}
-        fragmentShader={waterFragmentShader}
-        transparent={needsTransparency}
-        depthWrite={!needsTransparency}
-      />
-    </mesh>
+    <>
+      <mesh
+        geometry={geometry}
+        rotation={[-Math.PI / 2, 0, 0]}
+        position={[0, water.level, 0]}
+        renderOrder={-1}
+      >
+        <shaderMaterial
+          ref={materialRef}
+          uniforms={uniforms}
+          vertexShader={waterVertexShader}
+          fragmentShader={waterFragmentShader}
+          transparent={needsTransparency}
+          depthWrite={!needsTransparency}
+        />
+      </mesh>
+
+      {placementPreviewEnabled && (
+        <mesh
+          rotation={[-Math.PI / 2, 0, 0]}
+          position={[0, water.level, 0]}
+          visible={false}
+          onPointerMove={handleWaterPreviewMove}
+        >
+          <planeGeometry args={[water.planeSize, water.planeSize]} />
+        </mesh>
+      )}
+    </>
   )
 }

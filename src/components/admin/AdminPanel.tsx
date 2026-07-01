@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { getAdminPassword } from '../../config/defaults'
+import { DEFAULT_CAMERA_SETTINGS } from '../../config/cameraSettings'
 import { DEFAULT_FOG_SETTINGS } from '../../config/fogSettings'
 import { DEFAULT_SCENE_APPEARANCE, HDRI_OPTIONS, normalizeSceneAppearance } from '../../config/sceneAppearance'
 import {
@@ -14,8 +15,9 @@ import { useSandbox } from '../../context/SandboxProvider'
 import { useTerrainHeightmap } from '../../context/TerrainHeightmapProvider'
 import { useAdminPanelLayout, type AdminPanelSectionId } from '../../hooks/useAdminPanelLayout'
 import type { PropDefinition } from '../../types/propLibrary'
-import type { FogSettings, LatLng, PropRateLimit, SceneAppearance, TerrainSettings, WaterMeshQuality, WaterSettings } from '../../types/sandbox'
+import type { CameraSettings, FogSettings, LatLng, PropRateLimit, SceneAppearance, TerrainSettings, WaterMeshQuality, WaterSettings } from '../../types/sandbox'
 import { getPropRateLimit } from '../../utils/rateLimitSettings'
+import { useAdminSceneAppearanceDraft } from '../../hooks/useAdminSceneAppearanceDraft'
 import { HeightmapMapPicker } from './HeightmapMapPicker'
 import { VisibilityToggle } from './VisibilityToggle'
 
@@ -61,7 +63,7 @@ function AdminSection({
 
 export function AdminPanel() {
   const { isAdmin, isPanelOpen, togglePanel, logout, zoneDrawingMode, setZoneDrawingMode, draftZonePoints, clearDraftZone, finishDraftZone, adminProfile, isSupabaseAdmin } = useAdmin()
-  const { settings, setSettings, patchSettings, placedProps, canUndo, canRedo, undo, redo, syncRateLimitSettings, syncSceneAppearanceSettings, isAdminSession, isMultiplayer, wipeMapClutter, wipeAllProps, setLayoutLocked, isLayoutLocked } = useSandbox()
+  const { settings, setSettings, patchSettings, placedProps, canUndo, canRedo, undo, redo, syncRateLimitSettings, syncSceneAppearanceSettings, isAdminSession, isMultiplayer, wipeMapClutter, wipeAllProps, setLayoutLocked, isLayoutLocked, captureCameraView } = useSandbox()
   const [zoneName, setZoneName] = useState('Allowed Zone')
   const [rateLimitMessage, setRateLimitMessage] = useState<string | null>(null)
   const [sceneMessage, setSceneMessage] = useState<string | null>(null)
@@ -88,7 +90,24 @@ export function AdminPanel() {
     generateSurfaceFromPolygon,
   } = useTerrainHeightmap()
 
-  const sceneAppearance = normalizeSceneAppearance(settings.sceneAppearance)
+  const committedSceneAppearance = useMemo(
+    () => normalizeSceneAppearance(settings.sceneAppearance),
+    [settings.sceneAppearance],
+  )
+
+  const { sceneAppearance, applySceneAppearance } = useAdminSceneAppearanceDraft({
+    committed: committedSceneAppearance,
+    patchSettings,
+    syncSceneAppearanceSettings,
+    isMultiplayer,
+    getAdminPassword,
+    onLocalMessage: setSceneMessage,
+    onSyncStart: () => setIsSavingScene(true),
+    onSyncEnd: (message) => {
+      setIsSavingScene(false)
+      if (message) setSceneMessage(message)
+    },
+  })
 
   useEffect(() => {
     if (!terrainDrawing && !isGeneratingTerrain) {
@@ -258,59 +277,84 @@ export function AdminPanel() {
     setMapOpMessage(result.ok ? 'Layout unlocked. Visitors can place props again.' : result.message)
   }
 
-  const applySceneAppearance = async (next: SceneAppearance) => {
-    patchSettings({ sceneAppearance: next })
-
-    if (!isMultiplayer) {
-      setSceneMessage('Scene settings saved locally.')
-      return
-    }
-
-    setIsSavingScene(true)
-    setSceneMessage(null)
-    const result = await syncSceneAppearanceSettings(next, getAdminPassword())
-    setIsSavingScene(false)
-    setSceneMessage(result.ok ? 'Scene applied for all visitors.' : result.message)
-  }
-
   const updateSceneAppearance = (patch: Partial<SceneAppearance>) => {
-    void applySceneAppearance({ ...sceneAppearance, ...patch })
+    applySceneAppearance({ ...sceneAppearance, ...patch })
   }
 
   const resetSceneAppearance = () => {
-    void applySceneAppearance(DEFAULT_SCENE_APPEARANCE)
+    applySceneAppearance(DEFAULT_SCENE_APPEARANCE, { immediate: true })
   }
 
   const updateWater = (patch: Partial<WaterSettings>) => {
-    void applySceneAppearance({
+    applySceneAppearance({
       ...sceneAppearance,
       water: { ...sceneAppearance.water, ...patch },
     })
   }
 
   const resetWater = () => {
-    void applySceneAppearance({
-      ...sceneAppearance,
-      water: DEFAULT_WATER_SETTINGS,
-    })
+    applySceneAppearance(
+      {
+        ...sceneAppearance,
+        water: DEFAULT_WATER_SETTINGS,
+      },
+      { immediate: true },
+    )
   }
 
   const updateFog = (patch: Partial<FogSettings>) => {
-    void applySceneAppearance({
+    applySceneAppearance({
       ...sceneAppearance,
       fog: { ...sceneAppearance.fog, ...patch },
     })
   }
 
   const resetFog = () => {
-    void applySceneAppearance({
+    applySceneAppearance(
+      {
+        ...sceneAppearance,
+        fog: DEFAULT_FOG_SETTINGS,
+      },
+      { immediate: true },
+    )
+  }
+
+  const updateCamera = (patch: Partial<CameraSettings>) => {
+    applySceneAppearance({
       ...sceneAppearance,
-      fog: DEFAULT_FOG_SETTINGS,
+      camera: { ...sceneAppearance.camera, ...patch },
     })
   }
 
+  const resetCamera = () => {
+    applySceneAppearance(
+      {
+        ...sceneAppearance,
+        camera: DEFAULT_CAMERA_SETTINGS,
+      },
+      { immediate: true },
+    )
+  }
+
+  const saveCurrentCameraView = () => {
+    const captured = captureCameraView()
+    if (!captured) {
+      setSceneMessage('Could not read the live camera. Orbit the scene and try again.')
+      return
+    }
+
+    applySceneAppearance(
+      {
+        ...sceneAppearance,
+        camera: { ...sceneAppearance.camera, ...captured },
+      },
+      { immediate: true },
+    )
+    setSceneMessage('Saved current view as the default starting camera.')
+  }
+
   const updateTerrain = (patch: Partial<TerrainSettings>) => {
-    void applySceneAppearance({
+    applySceneAppearance({
       ...sceneAppearance,
       terrain: { ...sceneAppearance.terrain, ...patch },
     })
@@ -337,10 +381,13 @@ export function AdminPanel() {
       return
     }
 
-    void applySceneAppearance({
-      ...sceneAppearance,
-      terrain: nextTerrain,
-    })
+    applySceneAppearance(
+      {
+        ...sceneAppearance,
+        terrain: nextTerrain,
+      },
+      { immediate: true },
+    )
     setTerrainDrawing(false)
     setTerrainMessage(
       `Applied real elevation (${nextTerrain.lastMinElevation?.toFixed(1)}–${nextTerrain.lastMaxElevation?.toFixed(1)} m, zoom ${nextTerrain.lastZoom}).`,
@@ -378,10 +425,13 @@ export function AdminPanel() {
       return
     }
 
-    void applySceneAppearance({
-      ...sceneAppearance,
-      terrain: nextTerrain,
-    })
+    applySceneAppearance(
+      {
+        ...sceneAppearance,
+        terrain: nextTerrain,
+      },
+      { immediate: true },
+    )
     setTerrainDrawing(false)
     setTerrainMessage(
       nextTerrain.surfaceStyle === 'orthophoto'
@@ -497,11 +547,178 @@ export function AdminPanel() {
           {sceneMessage && <p className="text-xs text-slate-400">{sceneMessage}</p>}
         </AdminSection>
 
+        <AdminSection title="Camera" showVisibilityToggle={false} {...section('camera')}>
+          <p className="text-xs text-slate-400">
+            Starting view and orbit limits. Syncs for all visitors when Supabase is connected.
+          </p>
+
+          <div className="grid grid-cols-3 gap-2">
+            {(['X', 'Y', 'Z'] as const).map((axis, index) => (
+              <label key={`pos-${axis}`} className="text-xs text-slate-400">
+                Position {axis}
+                <input
+                  type="number"
+                  step={1}
+                  value={sceneAppearance.camera.position[index]}
+                  onChange={(event) => {
+                    const next = [...sceneAppearance.camera.position] as [number, number, number]
+                    next[index] = Number(event.target.value)
+                    updateCamera({ position: next })
+                  }}
+                  disabled={isSavingScene}
+                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-white disabled:opacity-40"
+                />
+              </label>
+            ))}
+          </div>
+
+          <div className="grid grid-cols-3 gap-2">
+            {(['X', 'Y', 'Z'] as const).map((axis, index) => (
+              <label key={`target-${axis}`} className="text-xs text-slate-400">
+                Target {axis}
+                <input
+                  type="number"
+                  step={1}
+                  value={sceneAppearance.camera.target[index]}
+                  onChange={(event) => {
+                    const next = [...sceneAppearance.camera.target] as [number, number, number]
+                    next[index] = Number(event.target.value)
+                    updateCamera({ target: next })
+                  }}
+                  disabled={isSavingScene}
+                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-white disabled:opacity-40"
+                />
+              </label>
+            ))}
+          </div>
+
+          <label className="block text-xs text-slate-400">
+            Field of view ({Math.round(sceneAppearance.camera.fov)}°)
+            <input
+              type="range"
+              min={20}
+              max={100}
+              value={Math.round(sceneAppearance.camera.fov)}
+              onChange={(event) => updateCamera({ fov: Number(event.target.value) })}
+              disabled={isSavingScene}
+              className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+            />
+          </label>
+
+          <label className="block text-xs text-slate-400">
+            Min zoom distance ({Math.round(sceneAppearance.camera.minDistance)} units)
+            <input
+              type="range"
+              min={5}
+              max={300}
+              value={Math.round(sceneAppearance.camera.minDistance)}
+              onChange={(event) => updateCamera({ minDistance: Number(event.target.value) })}
+              disabled={isSavingScene}
+              className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+            />
+          </label>
+
+          <label className="block text-xs text-slate-400">
+            Max zoom distance ({Math.round(sceneAppearance.camera.maxDistance)} units)
+            <input
+              type="range"
+              min={50}
+              max={2000}
+              value={Math.round(sceneAppearance.camera.maxDistance)}
+              onChange={(event) => updateCamera({ maxDistance: Number(event.target.value) })}
+              disabled={isSavingScene}
+              className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+            />
+          </label>
+
+          <label className="block text-xs text-slate-400">
+            Max pitch ({Math.round(sceneAppearance.camera.maxPolarAngleDeg)}°)
+            <input
+              type="range"
+              min={30}
+              max={90}
+              value={Math.round(sceneAppearance.camera.maxPolarAngleDeg)}
+              onChange={(event) => updateCamera({ maxPolarAngleDeg: Number(event.target.value) })}
+              disabled={isSavingScene}
+              className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+            />
+          </label>
+
+          <button
+            type="button"
+            onClick={saveCurrentCameraView}
+            disabled={isSavingScene}
+            className="rounded-lg bg-cyan-700 px-3 py-2 text-sm text-white disabled:opacity-40"
+          >
+            Save current view as default
+          </button>
+
+          <button
+            type="button"
+            onClick={resetCamera}
+            disabled={isSavingScene}
+            className="rounded-lg bg-slate-800 px-3 py-2 text-sm text-white disabled:opacity-40"
+          >
+            Reset camera defaults
+          </button>
+        </AdminSection>
+
         <AdminSection title="Terrain heightmap" showVisibilityToggle={false} {...section('terrain')}>
           <p className="text-xs text-slate-400">
-            Draw an outline on the map to define real-world elevation bounds. Data comes from AWS Terrarium tiles
-            (Mapzen). The PNG is cached locally; polygon and settings sync via Supabase.
+            Draw an outline on the map to define real-world elevation bounds. Heightmaps use a fixed global coordinate
+            system so future imports stay aligned. Data is cached locally; settings sync via Supabase.
           </p>
+
+          <div className="grid grid-cols-2 gap-3">
+            <label className="text-xs text-slate-400">
+              Origin latitude (world 0,0)
+              <input
+                type="number"
+                step={0.0001}
+                value={sceneAppearance.terrain.originLat}
+                onChange={(event) => updateTerrain({ originLat: Number(event.target.value) })}
+                disabled={isSavingScene || isGeneratingTerrain}
+                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-white disabled:opacity-40"
+              />
+            </label>
+            <label className="text-xs text-slate-400">
+              Origin longitude (world 0,0)
+              <input
+                type="number"
+                step={0.0001}
+                value={sceneAppearance.terrain.originLng}
+                onChange={(event) => updateTerrain({ originLng: Number(event.target.value) })}
+                disabled={isSavingScene || isGeneratingTerrain}
+                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-white disabled:opacity-40"
+              />
+            </label>
+            <label className="text-xs text-slate-400">
+              Lat span (terrain height)
+              <input
+                type="number"
+                min={0.001}
+                max={0.5}
+                step={0.0001}
+                value={sceneAppearance.terrain.spanLat}
+                onChange={(event) => updateTerrain({ spanLat: Number(event.target.value) })}
+                disabled={isSavingScene || isGeneratingTerrain}
+                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-white disabled:opacity-40"
+              />
+            </label>
+            <label className="text-xs text-slate-400">
+              Lng span (terrain width)
+              <input
+                type="number"
+                min={0.001}
+                max={0.5}
+                step={0.0001}
+                value={sceneAppearance.terrain.spanLng}
+                onChange={(event) => updateTerrain({ spanLng: Number(event.target.value) })}
+                disabled={isSavingScene || isGeneratingTerrain}
+                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-white disabled:opacity-40"
+              />
+            </label>
+          </div>
 
           <HeightmapMapPicker
             polygon={draftTerrainPolygon}
@@ -738,10 +955,13 @@ export function AdminPanel() {
             type="button"
             onClick={() => {
               resetTerrainDraft()
-              void applySceneAppearance({
-                ...sceneAppearance,
-                terrain: DEFAULT_TERRAIN_SETTINGS,
-              })
+              applySceneAppearance(
+                {
+                  ...sceneAppearance,
+                  terrain: DEFAULT_TERRAIN_SETTINGS,
+                },
+                { immediate: true },
+              )
             }}
             disabled={isSavingScene || isGeneratingTerrain || isGeneratingSurface}
             className="rounded-lg bg-slate-800 px-3 py-2 text-sm text-white disabled:opacity-40"
@@ -867,11 +1087,24 @@ export function AdminPanel() {
             Sea plane size ({Math.round(sceneAppearance.water.planeSize)} units)
             <input
               type="range"
-              min={100}
+              min={50}
               max={2000}
               step={10}
               value={Math.round(sceneAppearance.water.planeSize)}
               onChange={(event) => updateWater({ planeSize: Number(event.target.value) })}
+              disabled={isSavingScene || !sceneAppearance.water.enabled}
+              className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
+            />
+          </label>
+
+          <label className="block text-xs text-slate-400">
+            Wave scale ({sceneAppearance.water.waveScale.toFixed(2)}× — higher = smaller ripples)
+            <input
+              type="range"
+              min={10}
+              max={800}
+              value={Math.round(sceneAppearance.water.waveScale * 100)}
+              onChange={(event) => updateWater({ waveScale: Number(event.target.value) / 100 })}
               disabled={isSavingScene || !sceneAppearance.water.enabled}
               className="mt-1 w-full accent-cyan-500 disabled:opacity-40"
             />

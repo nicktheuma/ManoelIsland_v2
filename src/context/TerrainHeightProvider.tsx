@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, type ReactNode } from 'react'
+import { normalizeSceneAppearance } from '../config/sceneAppearance'
 import { useSandbox } from './SandboxProvider'
 import { useTerrainHeightmap } from './TerrainHeightmapProvider'
 import { getTerrainHeightAt } from '../utils/terrainHeight'
@@ -11,8 +12,9 @@ type TerrainHeightContextValue = {
 const TerrainHeightContext = createContext<TerrainHeightContextValue | null>(null)
 
 export function TerrainHeightProvider({ children }: { children: ReactNode }) {
-  const { registerTerrainHeight } = useSandbox()
+  const { registerTerrainHeight, settings } = useSandbox()
   const { imageData, maxHeight } = useTerrainHeightmap()
+  const geo = normalizeSceneAppearance(settings.sceneAppearance).terrain
 
   const value = useMemo<TerrainHeightContextValue>(() => {
     if (!imageData) {
@@ -23,13 +25,13 @@ export function TerrainHeightProvider({ children }: { children: ReactNode }) {
     }
 
     return {
-      getHeightAt: (x, z) => getTerrainHeightAt(x, z, imageData, maxHeight),
+      getHeightAt: (x, z) => getTerrainHeightAt(x, z, imageData, maxHeight, geo),
       projectOntoTerrain: (x, z, offset = 0.15) => {
-        const y = getTerrainHeightAt(x, z, imageData, maxHeight) + offset
+        const y = getTerrainHeightAt(x, z, imageData, maxHeight, geo) + offset
         return [x, y, z]
       },
     }
-  }, [imageData, maxHeight])
+  }, [geo, imageData, maxHeight])
 
   useEffect(() => {
     if (!imageData) {

@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { LatLng, TerrainSurfaceStyle } from '../types/sandbox'
+import type { LatLng, TerrainGeoReference, TerrainSurfaceStyle } from '../types/sandbox'
 import { buildOrthophotoSurface, type TileFetchProgress } from './orthophotoSurface'
 import { buildSimplifiedSiteMap, type SimplifiedMapProgress } from './simplifiedSiteMap'
 
@@ -97,17 +97,18 @@ export function createTextureFromCanvas(canvas: HTMLCanvasElement): THREE.Canvas
 export async function buildTerrainSurface(
   polygon: LatLng[],
   size: number,
+  geo: TerrainGeoReference,
   style: Exclude<TerrainSurfaceStyle, 'grid'>,
   onProgress?: (progress: SurfaceBuildProgress) => void,
 ): Promise<{ canvas: HTMLCanvasElement; objectUrl: string; zoom: number | null }> {
   if (style === 'orthophoto') {
-    const result = await buildOrthophotoSurface(polygon, size, (progress: TileFetchProgress) => {
+    const result = await buildOrthophotoSurface(polygon, size, geo, (progress: TileFetchProgress) => {
       onProgress?.({ phase: progress.phase, progress: progress.progress })
     })
     return { canvas: result.canvas, objectUrl: result.objectUrl, zoom: result.zoom }
   }
 
-  const result = await buildSimplifiedSiteMap(polygon, size, (progress: SimplifiedMapProgress) => {
+  const result = await buildSimplifiedSiteMap(polygon, size, geo, (progress: SimplifiedMapProgress) => {
     onProgress?.({ phase: progress.phase, progress: progress.progress })
   })
   return { canvas: result.canvas, objectUrl: result.objectUrl, zoom: result.zoom }

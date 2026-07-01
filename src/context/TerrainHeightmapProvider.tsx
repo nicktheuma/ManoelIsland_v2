@@ -121,6 +121,7 @@ export function TerrainHeightmapProvider({ children }: { children: ReactNode }) 
       const result = await buildHeightmapFromPolygon(
         nextTerrain.polygon,
         nextTerrain.sampleSize,
+        nextTerrain,
         setProgress,
       )
       if (loadId !== loadIdRef.current) return
@@ -169,6 +170,7 @@ export function TerrainHeightmapProvider({ children }: { children: ReactNode }) 
       const result = await buildTerrainSurface(
         nextTerrain.polygon,
         nextTerrain.sampleSize,
+        nextTerrain,
         nextTerrain.surfaceStyle,
         setSurfaceProgress,
       )
@@ -191,7 +193,7 @@ export function TerrainHeightmapProvider({ children }: { children: ReactNode }) 
 
   useEffect(() => {
     void loadHeightmap(terrain)
-  }, [loadHeightmap, terrain.source, terrain.version, terrain.sampleSize])
+  }, [loadHeightmap, terrain.source, terrain.version, terrain.sampleSize, terrain.originLat, terrain.originLng, terrain.spanLat, terrain.spanLng])
 
   useEffect(() => {
     void loadSurface(terrain)
@@ -265,7 +267,7 @@ export function TerrainHeightmapProvider({ children }: { children: ReactNode }) 
           lastZoom: null,
         }
 
-        const result = await buildHeightmapFromPolygon(polygon, next.sampleSize, setProgress)
+        const result = await buildHeightmapFromPolygon(polygon, next.sampleSize, draftSettings, setProgress)
         if (loadId !== loadIdRef.current) return null
 
         saveCachedHeightmapUrl(draftSettings, result.objectUrl)
@@ -319,6 +321,7 @@ export function TerrainHeightmapProvider({ children }: { children: ReactNode }) 
         const result = await buildTerrainSurface(
           polygon,
           next.sampleSize,
+          draftSettings,
           next.surfaceStyle,
           setSurfaceProgress,
         )

@@ -64,7 +64,8 @@ export type WaterSettings = {
   waveIntensity: number
   waveRandomness: number
   waveSeed: number
-  detailLayers: 0 | 1 | 2
+  waveScale: number
+  detailLayers: 0 | 1 | 2 | 3 | 4
   detailScale: number
   detailStrength: number
   animationSpeed: number
@@ -85,9 +86,16 @@ export type FogSettings = {
 
 export type LatLng = [number, number]
 
+export type TerrainGeoReference = {
+  originLat: number
+  originLng: number
+  spanLat: number
+  spanLng: number
+}
+
 export type TerrainSurfaceStyle = 'grid' | 'orthophoto' | 'simplified'
 
-export type TerrainSettings = {
+export type TerrainSettings = TerrainGeoReference & {
   source: 'procedural' | 'dem'
   polygon: LatLng[]
   sampleSize: 64 | 96 | 128
@@ -103,6 +111,17 @@ export type TerrainSettings = {
   lastSurfaceZoom: number | null
 }
 
+export type CameraSettings = {
+  position: [number, number, number]
+  target: [number, number, number]
+  fov: number
+  minDistance: number
+  maxDistance: number
+  maxPolarAngleDeg: number
+}
+
+export type CapturedCameraView = Pick<CameraSettings, 'position' | 'target' | 'fov'>
+
 export type SceneAppearance = {
   hdriPreset: HdriPresetId
   backgroundColor: string
@@ -110,6 +129,7 @@ export type SceneAppearance = {
   terrainFillOpacity: number
   terrainGridColor: string
   terrain: TerrainSettings
+  camera: CameraSettings
   water: WaterSettings
   fog: FogSettings
 }

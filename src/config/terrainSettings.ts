@@ -13,6 +13,10 @@ export const MANOEL_ISLAND_POLYGON: LatLng[] = [
 ]
 
 export const DEFAULT_TERRAIN_SETTINGS: TerrainSettings = {
+  originLat: 35.904,
+  originLng: 14.502,
+  spanLat: 0.012,
+  spanLng: 0.012,
   source: 'dem',
   polygon: MANOEL_ISLAND_POLYGON,
   sampleSize: 128,
@@ -49,6 +53,10 @@ export function normalizeTerrainSettings(value: Partial<TerrainSettings> | null 
     : DEFAULT_TERRAIN_SETTINGS.sampleSize
 
   return {
+    originLat: clampGeo(value?.originLat ?? DEFAULT_TERRAIN_SETTINGS.originLat, DEFAULT_TERRAIN_SETTINGS.originLat),
+    originLng: clampGeo(value?.originLng ?? DEFAULT_TERRAIN_SETTINGS.originLng, DEFAULT_TERRAIN_SETTINGS.originLng),
+    spanLat: clamp(value?.spanLat ?? DEFAULT_TERRAIN_SETTINGS.spanLat, 0.001, 0.5, DEFAULT_TERRAIN_SETTINGS.spanLat),
+    spanLng: clamp(value?.spanLng ?? DEFAULT_TERRAIN_SETTINGS.spanLng, 0.001, 0.5, DEFAULT_TERRAIN_SETTINGS.spanLng),
     source: value?.source === 'procedural' ? 'procedural' : 'dem',
     polygon,
     sampleSize,
@@ -70,6 +78,11 @@ function normalizeSurfaceStyle(value: unknown): TerrainSurfaceStyle {
   return DEFAULT_TERRAIN_SETTINGS.surfaceStyle
 }
 
+function clampGeo(value: number, fallback: number): number {
+  if (!Number.isFinite(value)) return fallback
+  return value
+}
+
 function clamp(value: number, min: number, max: number, fallback: number): number {
   if (!Number.isFinite(value)) return fallback
   return Math.min(max, Math.max(min, value))
@@ -79,7 +92,7 @@ const CACHE_PREFIX = 'manoel-dem-heightmap-'
 const SURFACE_CACHE_PREFIX = 'manoel-terrain-surface-'
 
 export function terrainCacheKey(settings: TerrainSettings): string {
-  return `${CACHE_PREFIX}${settings.version}-${settings.sampleSize}`
+  return `${CACHE_PREFIX}${settings.version}-${settings.sampleSize}-${settings.originLat.toFixed(5)}-${settings.originLng.toFixed(5)}-${settings.spanLat.toFixed(5)}-${settings.spanLng.toFixed(5)}`
 }
 
 export function loadCachedHeightmapUrl(settings: TerrainSettings): string | null {
